@@ -1,513 +1,1119 @@
-Attribute VB_Name = "Mod_Position"
-' ===========================================================
-' Mod_Position.bas - v1.0.3
-' - Build Position from Order_History up to cutoff (UTC+7)
-' - Write Dashboard (Cash/Coin/NAV/Deposit/Withdraw/Total PnL)
-' - Update Market Price for Open rows only
-' - Compatible with Mod_Config.bas (v1.0.x)
-' ===========================================================
+Attribute VB_Name = "mod_position"
 Option Explicit
 
-' ==== TYPES ====
-Public Type OrderHeaderMap
-    rowHeader As Long
-    cDate As Long
-    cType As Long
-    cCoin As Long
-    cQty As Long
-    cPrice As Long
-    cFee As Long
-    cXchg As Long
-    cTotal As Long
-End Type
+' Uses global config from mod_config.bas
+Private Const OUTPUT_OFFSET_ROWS As Long = 1
 
-Public Type SessionRow
-    coin As String
-    Position As String
-    BuyQty As Double
-    SellQty As Double
-    AvailQty As Double
-    Cost As Double
-    AvgCost As Double
-    SellProceeds As Double
-    AvgSell As Double
-    MktPrice As Double
-    AvailBalance As Double
-    Profit As Double
-    PctPnL As Double
-    Storage As String
-End Type
+Public Sub Update_All_Position()
+    On Error GoTo Fail
 
-Public Type PortfolioAggregate
-    Sessions() As SessionRow
-    SumDeposit As Double
-    SumWithdraw As Double
-    SumSell As Double
-    SumBuy As Double
-    cash As Double
-    coin As Double
-    NAV As Double
-    TotalPnL As Double
-End Type
-
-' ========= Public API =========
-Public Sub Update_All_PositionColumns()
     Dim wsP As Worksheet, wsO As Worksheet
-    Set wsP = SheetByName(Mod_Config.SHEET_PORTFOLIO)
-    Set wsO = SheetByName(Mod_Config.SHEET_ORDERS)
-    If wsP Is Nothing Or wsO Is Nothing Then
-        MsgBox "Missing sheet '" & Mod_Config.SHEET_PORTFOLIO & "' or '" & Mod_Config.SHEET_ORDERS & "'.", vbExclamation
-        Exit Sub
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+    Set wsO = SheetByName(mod_config.SHEET_ORDERS)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
+    If wsO Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_ORDERS & "' not found."
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    ' --- Detect headers
+    Dim hdrP As Long: hdrP = DetectPortfolioHeaderRow(wsP)
+    If hdrP = 0 Then Err.Raise 1004, , "Cannot find header row on '" & mod_config.SHEET_PORTFOLIO & "'."
+    Dim OUT_START As Long: OUT_START = hdrP + OUTPUT_OFFSET_ROWS
+
+    Dim hdrO As Long: hdrO = DetectOrderHeaderRow(wsO, mod_config.ORDERS_HEADER_ROW_DEFAULT)
+
+    ' --- Map headers
+    Dim portCols As Object: Set portCols = MapPortfolioHeaders(wsP, hdrP)
+    Dim ordCols As Object: Set ordCols = MapOrderHeaders(wsO, hdrO)
+
+    ' Ensure required columns on Position sheet
+    EnsureMapped portCols, "Position"
+    EnsureMapped portCols, "Coin"
+    EnsureMapped portCols, "Open date"
+    EnsureMapped portCols, "Close date"
+    EnsureMapped portCols, "Buy Qty"
+    EnsureMapped portCols, "Cost"
+    EnsureMapped portCols, "Avg. cost"
+    EnsureMapped portCols, "sell qty"
+    EnsureMapped portCols, "sell proceeds"
+    EnsureMapped portCols, "avg sell price"
+    EnsureMapped portCols, "available qty"
+
+    ' --- Robust last order row
+    Dim lastO As Long
+    lastO = Application.WorksheetFunction.Max( _
+                LastRowIn(wsO, ordCols("Date"), hdrO), _
+                LastRowIn(wsO, ordCols("Type"), hdrO), _
+                LastRowIn(wsO, ordCols("Coin"), hdrO), _
+                LastRowIn(wsO, ordCols("Qty"), hdrO))
+    If lastO < hdrO + 1 Then
+        ClearPortfolioOutput wsP, portCols, hdrP, OUT_START
+        wsP.Range(mod_config.CELL_CASH).Value = vbNullString
+        wsP.Range(mod_config.CELL_COIN).Value = vbNullString
+        wsP.Range(mod_config.CELL_NAV).Value = vbNullString
+        wsP.Range(mod_config.CELL_SUM_DEPOSIT).Value = vbNullString
+        wsP.Range(mod_config.CELL_SUM_WITHDRAW).Value = vbNullString
+        wsP.Range(mod_config.CELL_TOTAL_PNL).Value = vbNullString
+        MsgBox "No data in Order_History.", vbInformation
+        GoTo Clean
     End If
 
-    Dim cutoff As Date
-    If Not TryReadCutoff(wsP, cutoff) Then
-        MsgBox "Cannot read cutoff at " & Mod_Config.SHEET_PORTFOLIO & " !" & Mod_Config.CELL_CUTOFF, vbExclamation
-        Exit Sub
+    ' --- Cutoff from Position!B3 (UTC+7). Date-only -> 23:59:59 of that day.
+    Dim cutoffEnabled As Boolean: cutoffEnabled = False
+    Dim cutoffDtUTC7 As Date
+    If GetCutoffFromPositionB3(cutoffDtUTC7) Then cutoffEnabled = True
+
+    Dim cutoffHi As Date
+    If cutoffEnabled Then
+        If cutoffDtUTC7 = Int(cutoffDtUTC7) Then
+            cutoffHi = DateAdd("s", -1, DateAdd("d", 1, cutoffDtUTC7)) ' 23:59:59 end-of-day
+        Else
+            cutoffHi = cutoffDtUTC7
+        End If
     End If
 
-    Dim hdr As OrderHeaderMap
-    If Not MapOrderHeaders(wsO, hdr) Then
-        MsgBox "Required columns not found on '" & Mod_Config.SHEET_ORDERS & "'.", vbExclamation
-        Exit Sub
-    End If
+    Dim dayCutoffUTC7 As Date: dayCutoffUTC7 = IIf(cutoffEnabled, DateValue(cutoffDtUTC7), Date)
+    Dim todayUTC7 As Date: todayUTC7 = Date
 
-    Dim agg As PortfolioAggregate
-    BuildPortfolio wsO, hdr, cutoff, agg
+    ' --- Build sessions & aggregate cash
+    Dim sessions As Collection: Set sessions = New Collection
+    Dim stateRun As Object: Set stateRun = CreateObject("Scripting.Dictionary"): stateRun.CompareMode = vbTextCompare
+    Dim stateSess As Object: Set stateSess = CreateObject("Scripting.Dictionary"): stateSess.CompareMode = vbTextCompare
 
-    RenderPosition wsP, agg
-    WriteDashboard wsP, agg
+    Dim totalDeposit As Double, totalWithdraw As Double, totalBuy As Double, totalSell As Double
+    totalDeposit = 0#: totalWithdraw = 0#: totalBuy = 0#: totalSell = 0#
 
-    If Mod_Config.AUTOFIT_WRITTEN_COLUMNS Then
-        wsP.UsedRange.Columns.AutoFit
-    End If
-End Sub
+    ' Optional "Total" column support
+    Dim colTotal As Long: colTotal = 0
+    On Error Resume Next
+    If ordCols.Exists("Total") Then colTotal = CLng(ordCols("Total"))
+    On Error GoTo 0
 
-' Optional helper: update Market Price for open rows only
-Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
-    Dim wsP As Worksheet
-    Set wsP = SheetByName(Mod_Config.SHEET_PORTFOLIO)
-    If wsP Is Nothing Then Exit Sub
+    Dim r As Long, vDate As Variant, vDateUTC7 As Date
+    Dim vSide As String, vCoin As String
+    Dim vQty As Double, vPrice As Double, vFee As Double, vEx As String
+    Dim vTotal As Double, hasTotal As Boolean
+    Dim runQty As Double
+    Dim sess As Object
 
-    Dim cutoff As Date
-    If Not TryReadCutoff(wsP, cutoff) Then Exit Sub
+    For r = hdrO + 1 To lastO
+        vDate = wsO.Cells(r, ordCols("Date")).Value
+        If IsDate(vDate) Then
+            vDateUTC7 = OrderToUTC7(CDate(vDate))
+            If (Not cutoffEnabled) Or (vDateUTC7 <= cutoffHi) Then
+                vSide = UCase$(Trim$(CStr(wsO.Cells(r, ordCols("Type")).Value)))
+                vCoin = Trim$(CStr(wsO.Cells(r, ordCols("Coin")).Value))
+                vQty = NzD(wsO.Cells(r, ordCols("Qty")).Value)
+                If ordCols("Price") > 0 Then vPrice = NzD(wsO.Cells(r, ordCols("Price")).Value) Else vPrice = 0#
+                If ordCols("Fee") > 0 Then vFee = NzD(wsO.Cells(r, ordCols("Fee")).Value) Else vFee = 0#
+                If ordCols("Exchange") > 0 Then vEx = Trim$(CStr(wsO.Cells(r, ordCols("Exchange")).Value)) Else vEx = ""
 
-    Dim lastRow As Long
-    lastRow = LastRowFast(wsP, 1)
-    If lastRow < 5 Then Exit Sub
+                hasTotal = (colTotal > 0 And IsNumeric(wsO.Cells(r, colTotal).Value))
+                If hasTotal Then vTotal = NzD(wsO.Cells(r, colTotal).Value) Else vTotal = 0#
 
-    Dim colCoin As Long, colPos As Long, colMkt As Long, colAvail As Long
-    FindPositionTableColumns wsP, colCoin, colPos, colMkt, colAvail
-    If colCoin = 0 Or colPos = 0 Or colMkt = 0 Then Exit Sub
+                ' ---- Cash legs (prefer Total when available)
+                Select Case vSide
+                    Case "DEPOSIT"
+                        If hasTotal Then totalDeposit = totalDeposit + vTotal Else totalDeposit = totalDeposit + vQty
 
-    Dim r As Long
-    For r = 5 To lastRow
-        If UCase$(Nz(wsP.Cells(r, colPos).Value)) = "OPEN" Then
-            Dim coin As String: coin = CStr(Nz(wsP.Cells(r, colCoin).Value))
-            If Len(coin) > 0 And Not IsStable(coin) Then
-                Dim px As Double: px = GetMarketPrice_ByRule(coin, cutoff)
-                If px > 0 Then wsP.Cells(r, colMkt).Value = Round(px, Mod_Config.ROUND_PRICE_DECIMALS)
-            ElseIf IsStable(coin) Then
-                wsP.Cells(r, colMkt).Value = Mod_Config.STABLECOIN_UNIT_PRICE
+                    Case "WITHDRAW"
+                        If hasTotal Then totalWithdraw = totalWithdraw + vTotal Else totalWithdraw = totalWithdraw + vQty
+
+                    Case "BUY"
+                        If hasTotal And vTotal <> 0 Then _
+                            totalBuy = totalBuy + vTotal _
+                        Else _
+                            totalBuy = totalBuy + (vQty * vPrice + vFee)
+
+                    Case "SELL"
+                        If hasTotal And vTotal <> 0 Then _
+                            totalSell = totalSell + vTotal _
+                        Else _
+                            totalSell = totalSell + (vQty * vPrice - vFee)
+                End Select
+
+                ' ---- Sessions (build P/L rows)
+                If vCoin <> "" And vQty <> 0 Then
+                    If stateRun.Exists(vCoin) Then runQty = stateRun(vCoin) Else runQty = 0#
+                    Select Case vSide
+                        Case "BUY"
+                            If Abs(runQty) <= mod_config.EPS_CLOSE Then
+                                Set sess = NewSession(vCoin, vDateUTC7)
+                                Set stateSess(vCoin) = sess
+                            Else
+                                Set sess = stateSess(vCoin)
+                            End If
+                            sess("BuyQty") = sess("BuyQty") + vQty
+                            sess("Cost") = sess("Cost") + (vQty * vPrice) + vFee
+                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC7, vEx
+                            runQty = runQty + vQty
+                            stateRun(vCoin) = runQty
+                            Set stateSess(vCoin) = sess
+
+                        Case "SELL"
+                            If Not stateSess.Exists(vCoin) Then
+                                Set sess = NewSession(vCoin, vDateUTC7)
+                            Else
+                                Set sess = stateSess(vCoin)
+                            End If
+                            sess("SellQty") = sess("SellQty") + vQty
+                            sess("SellProceeds") = sess("SellProceeds") + (vQty * vPrice) - vFee
+                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC7, vEx
+                            runQty = runQty - vQty
+                            stateRun(vCoin) = runQty
+                            Set stateSess(vCoin) = sess
+
+                            If runQty <= mod_config.EPS_CLOSE Then
+                                sess("CloseDate") = vDateUTC7
+                                sess("AvailableQty") = 0#
+                                sessions.Add sess
+                                stateSess.Remove vCoin
+                                stateRun(vCoin) = 0#
+                            End If
+                    End Select
+                End If
             End If
         End If
-    Next
-End Sub
+    Next r
 
-' ========= Core Build (no Variant<->UDT coercion) =========
-Private Sub BuildPortfolio(wsO As Worksheet, hdr As OrderHeaderMap, cutoff As Date, agg As PortfolioAggregate)
-    Dim lastRow As Long
-    lastRow = LastRowFast(wsO, IIf(hdr.cDate > 0, hdr.cDate, 1))
-
-    ' Per-coin states
-    Dim runQty As Object:       Set runQty = CreateObject("Scripting.Dictionary")
-    Dim latestXchg As Object:   Set latestXchg = CreateObject("Scripting.Dictionary")
-    Dim dBuyQty As Object:      Set dBuyQty = CreateObject("Scripting.Dictionary")
-    Dim dSellQty As Object:     Set dSellQty = CreateObject("Scripting.Dictionary")
-    Dim dCost As Object:        Set dCost = CreateObject("Scripting.Dictionary")
-    Dim dSellCash As Object:    Set dSellCash = CreateObject("Scripting.Dictionary")
-
-    Dim i As Long
-    For i = hdr.rowHeader + 1 To lastRow
-        Dim vDate As Variant: vDate = wsO.Cells(i, hdr.cDate).Value
-        If IsEmpty(vDate) Then GoTo ContinueLoop
-
-        ' UTC-4 -> UTC+7 (+11h)
-        Dim tZ7 As Date
-        On Error Resume Next
-        tZ7 = CDate(vDate) + (Mod_Config.ORDERS_TZ_OFFSET_HOURS / 24#)
-        On Error GoTo 0
-        If tZ7 = 0 Or tZ7 > cutoff Then GoTo ContinueLoop
-
-        Dim t As String:   t = UCase$(Trim$(CStr(Nz(wsO.Cells(i, hdr.cType).Value))))
-        Dim coin As String: coin = UCase$(Trim$(CStr(Nz(wsO.Cells(i, hdr.cCoin).Value))))
-        Dim qty As Double:  qty = CDbl(val(Nz(wsO.Cells(i, hdr.cQty).Value)))
-        Dim price As Double: price = CDbl(val(Nz(IfNZ(hdr.cPrice, wsO, i))))
-        Dim fee As Double:   fee = CDbl(val(Nz(IfNZ(hdr.cFee, wsO, i))))
-        Dim exch As String:  exch = CStr(Nz(IfNZText(hdr.cXchg, wsO, i)))
-        Dim total As Variant: total = IfNZ(hdr.cTotal, wsO, i)
-
-        If Len(exch) > 0 Then latestXchg(coin) = exch
-
-        Select Case t
-            Case "BUY"
-                Dim buyCash As Double
-                If Not IsMissingVal(total) Then buyCash = CDbl(total) Else buyCash = qty * price + fee
-                agg.SumBuy = agg.SumBuy + buyCash
-                runQty(coin) = Nz(runQty(coin)) + qty
-                dBuyQty(coin) = Nz(dBuyQty(coin)) + qty
-                dCost(coin) = Nz(dCost(coin)) + buyCash
-
-            Case "SELL"
-                Dim sellCash As Double
-                If Not IsMissingVal(total) Then sellCash = CDbl(total) Else sellCash = qty * price - fee
-                agg.SumSell = agg.SumSell + sellCash
-                runQty(coin) = Nz(runQty(coin)) - qty
-                dSellQty(coin) = Nz(dSellQty(coin)) + qty
-                dSellCash(coin) = Nz(dSellCash(coin)) + sellCash
-
-            Case "DEPOSIT"
-                agg.SumDeposit = agg.SumDeposit + CDbl(val(Nz(IIf(IsMissingVal(total), qty * price, total))))
-
-            Case "WITHDRAW"
-                agg.SumWithdraw = agg.SumWithdraw + CDbl(val(Nz(IIf(IsMissingVal(total), qty * price, total))))
-        End Select
-ContinueLoop:
-    Next i
-
-    ' Build SessionRow array from dictionaries
-    Dim keys As Object: Set keys = CreateObject("Scripting.Dictionary")
-    CopyKeys runQty, keys: CopyKeys dBuyQty, keys: CopyKeys dSellQty, keys: CopyKeys dCost, keys
-
-    Dim arr() As SessionRow
-    Dim idx As Long: idx = 0
+    ' --- Flush remaining open sessions
     Dim k As Variant
-    For Each k In keys.keys
-        Dim s As SessionRow
-        s.coin = CStr(k)
-        s.BuyQty = CDbl(Nz(dBuyQty(k)))
-        s.SellQty = CDbl(Nz(dSellQty(k)))
-        s.Cost = CDbl(Nz(dCost(k)))
-        s.SellProceeds = CDbl(Nz(dSellCash(k)))
-        If s.BuyQty > 0 Then s.AvgCost = SafeDiv(s.Cost, s.BuyQty)
-        If s.SellQty > 0 Then s.AvgSell = SafeDiv(s.SellProceeds, s.SellQty)
-
-        s.AvailQty = Round(Nz(runQty(s.coin)), Mod_Config.ROUND_QTY_DECIMALS)
-        s.Position = IIf(s.AvailQty > 0, "Open", "Closed")
-        If latestXchg.Exists(s.coin) Then s.Storage = CStr(latestXchg(s.coin))
-
-        PushSession arr, idx, s
+    For Each k In stateSess.Keys
+        Dim sOpen As Object: Set sOpen = stateSess(k)
+        sOpen("AvailableQty") = NzD(stateRun(k))
+        sessions.Add sOpen
     Next k
 
-    ' Prefetch price and compute balances/PNL
-    Dim j As Long
-    For j = LBound(arr) To IIf((Not (Not arr)), UBound(arr), -1)
-        If j = -1 Then Exit For
-        If arr(j).Position = "Open" Then
-            Dim px As Double
-            If IsStable(arr(j).coin) Then
-                px = Mod_Config.STABLECOIN_UNIT_PRICE
-            Else
-                px = GetMarketPrice_ByRule(arr(j).coin, cutoff)
-            End If
-            arr(j).MktPrice = Round(px, Mod_Config.ROUND_PRICE_DECIMALS)
-            If arr(j).AvailQty > 0 And px > 0 Then _
-                arr(j).AvailBalance = Round(arr(j).AvailQty * px, Mod_Config.ROUND_MONEY_DECIMALS)
-            arr(j).Profit = Round((arr(j).SellProceeds + (arr(j).AvailBalance)) - arr(j).Cost, Mod_Config.ROUND_MONEY_DECIMALS)
-            If arr(j).Cost <> 0 Then arr(j).PctPnL = SafeDiv(arr(j).Profit, arr(j).Cost)
-        Else
-            arr(j).Profit = Round(arr(j).SellProceeds - arr(j).Cost, Mod_Config.ROUND_MONEY_DECIMALS)
-            If arr(j).Cost <> 0 Then arr(j).PctPnL = SafeDiv(arr(j).Profit, arr(j).Cost)
-        End If
-    Next j
+    ' --- Prefetch prices for Open positions only
+    Dim priceMap As Object: Set priceMap = CreateObject("Scripting.Dictionary"): priceMap.CompareMode = vbTextCompare
+    Dim openCoins As Object: Set openCoins = CreateObject("Scripting.Dictionary"): openCoins.CompareMode = vbTextCompare
 
-    ' Dashboard
-    Dim cash As Double
-    cash = (agg.SumDeposit + agg.SumSell) - (agg.SumBuy + agg.SumWithdraw)
-    Dim coinVal As Double
-    If (Not (Not arr)) Then
-        For j = LBound(arr) To UBound(arr)
-            If arr(j).Position = "Open" Then coinVal = coinVal + arr(j).AvailBalance
-        Next j
-    End If
-
-    agg.cash = Round(cash, Mod_Config.ROUND_MONEY_DECIMALS)
-    agg.coin = Round(coinVal, Mod_Config.ROUND_MONEY_DECIMALS)
-    agg.NAV = agg.cash + agg.coin
-    agg.TotalPnL = agg.NAV - (agg.SumDeposit - agg.SumWithdraw)
-
-    AggAssignSessions agg, arr
-End Sub
-
-' ========= Render Position =========
-Private Sub RenderPosition(wsP As Worksheet, agg As PortfolioAggregate)
-    Dim headers As Variant
-    headers = Array( _
-        "Coin", "Position", "Buy Qty", "Sell Qty", "Available Qty", _
-        "Cost", "Avg cost", "Sell proceeds", "Avg sell price", _
-        "Market Price", "Available Balance", "Profit", "%PnL", "Storage" _
-    )
-
-    Dim r0 As Long: r0 = 4
-    Dim c0 As Long: c0 = 1
-    Dim i As Long
-    For i = 0 To UBound(headers)
-        wsP.Cells(r0, c0 + i).Value = headers(i)
+    Dim i As Long, ss As Object
+    For i = 1 To sessions.Count
+        Set ss = sessions(i)
+        If ss("AvailableQty") > mod_config.EPS_CLOSE Then openCoins(ss("Coin")) = 1
     Next i
 
-    Dim last As Long
-    last = LastRowFast(wsP, 1)
-    If last > r0 Then
-        wsP.Rows(r0 + 1 & ":" & Application.Max(last, Mod_Config.TRAILING_CLEAR_UNTIL_ROW)).ClearContents
-    End If
-
-    Dim r As Long: r = r0 + 1
-    Dim s As SessionRow
-    Dim idx As Long
-    If (Not (Not agg.Sessions)) Then
-        For idx = LBound(agg.Sessions) To UBound(agg.Sessions)
-            s = agg.Sessions(idx)
-            wsP.Cells(r, 1).Value = s.coin
-            wsP.Cells(r, 2).Value = s.Position
-            wsP.Cells(r, 3).Value = Round(s.BuyQty, Mod_Config.ROUND_QTY_DECIMALS)
-            wsP.Cells(r, 4).Value = Round(s.SellQty, Mod_Config.ROUND_QTY_DECIMALS)
-            wsP.Cells(r, 5).Value = Round(s.AvailQty, Mod_Config.ROUND_QTY_DECIMALS)
-            wsP.Cells(r, 6).Value = Round(s.Cost, Mod_Config.ROUND_MONEY_DECIMALS)
-            wsP.Cells(r, 7).Value = Round(s.AvgCost, Mod_Config.ROUND_PRICE_DECIMALS)
-            wsP.Cells(r, 8).Value = Round(s.SellProceeds, Mod_Config.ROUND_MONEY_DECIMALS)
-            wsP.Cells(r, 9).Value = Round(s.AvgSell, Mod_Config.ROUND_PRICE_DECIMALS)
-            wsP.Cells(r, 10).Value = Round(s.MktPrice, Mod_Config.ROUND_PRICE_DECIMALS)
-            wsP.Cells(r, 11).Value = Round(s.AvailBalance, Mod_Config.ROUND_MONEY_DECIMALS)
-            wsP.Cells(r, 12).Value = Round(s.Profit, Mod_Config.ROUND_MONEY_DECIMALS)
-            wsP.Cells(r, 13).Value = s.PctPnL
-            wsP.Cells(r, 14).Value = s.Storage
-
-            wsP.Cells(r, 13).NumberFormat = Mod_Config.PCT_FMT
-            If s.Profit > 0 Then
-                wsP.Cells(r, 12).Font.Color = Mod_Config.COLOR_PNL_POSITIVE
-                wsP.Cells(r, 13).Font.Color = Mod_Config.COLOR_PNL_POSITIVE
-            ElseIf s.Profit < 0 Then
-                wsP.Cells(r, 12).Font.Color = Mod_Config.COLOR_PNL_NEGATIVE
-                wsP.Cells(r, 13).Font.Color = Mod_Config.COLOR_PNL_NEGATIVE
+    Dim coin As Variant, sym As String, px As Variant
+    If openCoins.Count > 0 Then
+        For Each coin In openCoins.Keys
+            sym = MapCoinToBinanceSymbol(CStr(coin))
+            If dayCutoffUTC7 < todayUTC7 Then
+                px = GetBinanceDailyCloseUTC(sym, dayCutoffUTC7)  ' interpret cutoff date as UTC day
+            Else
+                px = GetBinanceRealtimePrice(sym)
             End If
-            r = r + 1
-        Next idx
+            If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
+                px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
+            End If
+            If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(CStr(coin)) Then px = 1#
+            If IsNumeric(px) And px > 0 Then priceMap(coin) = CDbl(px)
+        Next coin
     End If
 
-    wsP.Range(wsP.Cells(r0 + 1, 3), wsP.Cells(r - 1, 5)).NumberFormat = "0." & String(Mod_Config.ROUND_QTY_DECIMALS, "0")
-    wsP.Range(wsP.Cells(r0 + 1, 6), wsP.Cells(r - 1, 6)).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 7), wsP.Cells(r - 1, 7)).NumberFormat = Mod_Config.PRICE_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 8), wsP.Cells(r - 1, 8)).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 9), wsP.Cells(r - 1, 9)).NumberFormat = Mod_Config.PRICE_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 10), wsP.Cells(r - 1, 10)).NumberFormat = Mod_Config.PRICE_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 11), wsP.Cells(r - 1, 11)).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(wsP.Cells(r0 + 1, 12), wsP.Cells(r - 1, 12)).NumberFormat = Mod_Config.MONEY_FMT
+    ' --- Clear output columns
+    ClearPortfolioOutput wsP, portCols, hdrP, OUT_START
+
+    ' --- Write sessions
+    Dim rowOut As Long: rowOut = OUT_START
+    Dim mktPrice As Variant, availBal As Variant, profitVal As Variant, pnlPctVal As Variant
+    Dim avgBuy As Variant, avgSell As Variant, posText As String
+    Dim totalHoldValue As Double: totalHoldValue = 0#
+
+    For i = 1 To sessions.Count
+        Set ss = sessions(i)
+
+        If ss("BuyQty") > mod_config.EPS_ZERO Then avgBuy = ss("Cost") / ss("BuyQty") Else avgBuy = vbNullString
+        If ss("SellQty") > mod_config.EPS_ZERO Then avgSell = ss("SellProceeds") / ss("SellQty") Else avgSell = vbNullString
+        posText = IIf(ss("AvailableQty") > mod_config.EPS_CLOSE, "Open", "Closed")
+
+        ' Market price for Open only
+        mktPrice = vbNullString
+        If posText = "Open" And portCols("market price") > 0 Then
+            If priceMap.Exists(ss("Coin")) Then mktPrice = priceMap(ss("Coin"))
+        End If
+
+        ' Available balance (unrealized)
+        availBal = vbNullString
+        If portCols("available balance") > 0 Then
+            If ss("AvailableQty") > mod_config.EPS_CLOSE And IsNumeric(mktPrice) Then
+                availBal = ss("AvailableQty") * CDbl(mktPrice)
+            ElseIf ss("AvailableQty") <= mod_config.EPS_CLOSE Then
+                availBal = 0#
+            End If
+        End If
+        If IsNumeric(availBal) Then totalHoldValue = totalHoldValue + CDbl(availBal)
+
+        ' PnL & %PnL
+        profitVal = vbNullString: pnlPctVal = vbNullString
+        If ss("AvailableQty") <= mod_config.EPS_CLOSE Then
+            profitVal = ss("SellProceeds") - ss("Cost")
+            If ss("Cost") > 0 And IsNumeric(profitVal) Then pnlPctVal = CDbl(profitVal) / ss("Cost")
+        Else
+            If IsNumeric(availBal) Then
+                profitVal = ss("SellProceeds") + CDbl(availBal) - ss("Cost")
+                If ss("Cost") > 0 Then pnlPctVal = CDbl(profitVal) / ss("Cost")
+            End If
+        End If
+
+        ' Round & write
+        WriteCellSafe wsP, rowOut, portCols("Buy Qty"), RoundN(ss("BuyQty"), 3)
+        WriteCellSafe wsP, rowOut, portCols("sell qty"), RoundN(ss("SellQty"), 3)
+        WriteCellSafe wsP, rowOut, portCols("available qty"), RoundN(ss("AvailableQty"), 3)
+
+        If IsNumeric(ss("Cost")) Then ss("Cost") = RoundN(ss("Cost"), 0)
+        If IsNumeric(avgBuy) Then avgBuy = RoundN(avgBuy, 0)
+        If IsNumeric(ss("SellProceeds")) Then ss("SellProceeds") = RoundN(ss("SellProceeds"), 0)
+        If IsNumeric(availBal) Then availBal = RoundN(availBal, 0)
+        If IsNumeric(profitVal) Then profitVal = RoundN(profitVal, 0)
+
+        WriteCellSafe wsP, rowOut, portCols("Position"), posText
+        WriteCellSafe wsP, rowOut, portCols("Coin"), ss("Coin")
+        WriteCellSafe wsP, rowOut, portCols("Open date"), ss("OpenDate")
+        If Not IsEmpty(ss("CloseDate")) Then WriteCellSafe wsP, rowOut, portCols("Close date"), ss("CloseDate")
+        WriteCellSafe wsP, rowOut, portCols("Cost"), ss("Cost")
+        WriteCellSafe wsP, rowOut, portCols("Avg. cost"), avgBuy
+        WriteCellSafe wsP, rowOut, portCols("sell proceeds"), ss("SellProceeds")
+        WriteCellSafe wsP, rowOut, portCols("avg sell price"), avgSell
+
+        If portCols("market price") > 0 Then
+            If IsNumeric(mktPrice) Then
+                WriteCellSafe wsP, rowOut, portCols("market price"), mktPrice
+            ElseIf mod_config.CLEAR_MARKET_PRICE Then
+                WriteCellSafe wsP, rowOut, portCols("market price"), vbNullString
+            End If
+        End If
+        If portCols("available balance") > 0 Then _
+            WriteCellSafe wsP, rowOut, portCols("available balance"), availBal
+
+        ' Profit color
+        If portCols("profit") > 0 Then
+            WriteCellSafe wsP, rowOut, portCols("profit"), profitVal
+            If IsNumeric(profitVal) Then
+                If profitVal > 0 Then
+                    wsP.Cells(rowOut, portCols("profit")).Font.Color = mod_config.COLOR_PNL_POSITIVE
+                ElseIf profitVal < 0 Then
+                    wsP.Cells(rowOut, portCols("profit")).Font.Color = mod_config.COLOR_PNL_NEGATIVE
+                Else
+                    wsP.Cells(rowOut, portCols("profit")).Font.Color = vbBlack
+                End If
+            Else
+                wsP.Cells(rowOut, portCols("profit")).Font.Color = vbBlack
+            End If
+        End If
+
+        ' %PnL color
+        If portCols("%PnL") > 0 Then
+            WriteCellSafe wsP, rowOut, portCols("%PnL"), pnlPctVal
+            If IsNumeric(pnlPctVal) Then
+                If pnlPctVal > 0 Then
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = mod_config.COLOR_PNL_POSITIVE
+                ElseIf pnlPctVal < 0 Then
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = mod_config.COLOR_PNL_NEGATIVE
+                Else
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = vbBlack
+                End If
+            Else
+                wsP.Cells(rowOut, portCols("%PnL")).Font.Color = vbBlack
+            End If
+        End If
+
+        If portCols("storage") > 0 Then WriteCellSafe wsP, rowOut, portCols("storage"), ss("Storage")
+
+        rowOut = rowOut + 1
+    Next i
+
+    ' --- Dashboard totals (Cash, Coin, NAV) + Deposit/Withdraw + Total P/L
+    Dim totalCash As Double, totalNAV As Double
+    Dim sumDeposit As Double, sumWithdraw As Double, totalPnL As Double
+
+    totalCash = (totalDeposit + totalSell) - (totalBuy + totalWithdraw)
+    totalNAV = totalCash + totalHoldValue
+    sumDeposit = totalDeposit
+    sumWithdraw = totalWithdraw
+    totalPnL = totalNAV - (sumDeposit - sumWithdraw)
+
+    With wsP
+        .Range(CELL_CASH).Value = Round(totalCash, 0)
+        .Range(CELL_COIN).Value = Round(totalHoldValue, 0)
+        .Range(CELL_NAV).Value = Round(totalNAV, 0)
+
+        .Range(CELL_SUM_DEPOSIT).Value = Round(sumDeposit, 0)
+        .Range(CELL_SUM_WITHDRAW).Value = Round(sumWithdraw, 0)
+        .Range(CELL_TOTAL_PNL).Value = Round(totalPnL, 0)
+
+        .Range(mod_config.CELL_CASH & ":" & mod_config.CELL_CASH).NumberFormat = mod_config.MONEY_FMT
+        .Range(mod_config.CELL_COIN & ":" & mod_config.CELL_COIN).NumberFormat = mod_config.MONEY_FMT
+        .Range(mod_config.CELL_NAV & ":" & mod_config.CELL_NAV).NumberFormat = mod_config.MONEY_FMT
+        .Range(mod_config.CELL_SUM_DEPOSIT & ":" & mod_config.CELL_SUM_DEPOSIT).NumberFormat = mod_config.MONEY_FMT
+        .Range(mod_config.CELL_SUM_WITHDRAW & ":" & mod_config.CELL_SUM_WITHDRAW).NumberFormat = mod_config.MONEY_FMT
+        .Range(mod_config.CELL_TOTAL_PNL & ":" & mod_config.CELL_TOTAL_PNL).NumberFormat = mod_config.MONEY_FMT
+    End With
+
+    ' --- Clear tail & format
+    Dim lastRowPos As Long: lastRowPos = rowOut - 1
+    If lastRowPos < 50 Then wsP.Range(wsP.Rows(lastRowPos + 1), wsP.Rows(50)).ClearContents
+
+    SafeFormat wsP, portCols, rowOut - 1, hdrP, OUT_START
+    MsgBox "Position updated (dashboard totals + Deposit/Withdraw + Total P/L).", vbInformation
+
+Clean:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Error: " & Err.Description, vbExclamation
 End Sub
 
-Private Sub WriteDashboard(wsP As Worksheet, agg As PortfolioAggregate)
-    wsP.Range(Mod_Config.CELL_CASH).Value = agg.cash
-    wsP.Range(Mod_Config.CELL_COIN).Value = agg.coin
-    wsP.Range(Mod_Config.CELL_NAV).Value = agg.NAV
-    wsP.Range(Mod_Config.CELL_SUM_DEPOSIT).Value = agg.SumDeposit
-    wsP.Range(Mod_Config.CELL_SUM_WITHDRAW).Value = agg.SumWithdraw
-    wsP.Range(Mod_Config.CELL_TOTAL_PNL).Value = agg.TotalPnL
+' =============================================================================
+' ======= INDEPENDENT MACRO: UPDATE MARKET PRICE (OPEN ONLY) ==================
+' =============================================================================
+' Cutoff is from Position!B3 (UTC+7). We decide:
+' - If cutoff DAY (UTC+7) < today (UTC+7): fetch Binance D1 close by interpreting the cutoff DATE as a UTC calendar day.
+' - Else: fetch realtime.
+Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
+    On Error GoTo Fail
 
-    wsP.Range(Mod_Config.CELL_CASH).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(Mod_Config.CELL_COIN).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(Mod_Config.CELL_NAV).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(Mod_Config.CELL_SUM_DEPOSIT).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(Mod_Config.CELL_SUM_WITHDRAW).NumberFormat = Mod_Config.MONEY_FMT
-    wsP.Range(Mod_Config.CELL_TOTAL_PNL).NumberFormat = Mod_Config.MONEY_FMT
+    Dim wsP As Worksheet
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
+
+    Dim cutoffUTC7 As Date
+    If Not GetCutoffFromPositionB3(cutoffUTC7) Then
+        MsgBox "Cutoff is missing/invalid. Please fill Position!B3 (UTC+7), e.g., 2025-08-31 or 2025-08-31 15:30.", vbExclamation
+        GoTo Clean
+    End If
+
+    Dim dayCutoffUTC7 As Date: dayCutoffUTC7 = DateValue(cutoffUTC7)
+    Dim todayUTC7 As Date: todayUTC7 = Date
+
+    Dim hdrRow As Long: hdrRow = DetectPortfolioHeaderRow(wsP)
+    If hdrRow = 0 Then Err.Raise 1004, , "Header not found on Position."
+    Dim OUT_START As Long: OUT_START = hdrRow + 1
+
+    Dim portCols As Object: Set portCols = MapPortfolioHeaders(wsP, hdrRow)
+    EnsureMapped portCols, "Coin"
+    EnsureMapped portCols, "Position"
+    EnsureMapped portCols, "market price"
+
+    Dim lastR As Long: lastR = LastRowIn(wsP, portCols("Coin"), hdrRow)
+    If lastR < OUT_START Then
+        MsgBox "No rows to update.", vbInformation
+        GoTo Clean
+    End If
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    Dim r As Long, coin As String, posVal As String, sym As String
+    Dim px As Variant
+
+    For r = OUT_START To lastR
+        coin = Trim$(CStr(wsP.Cells(r, portCols("Coin")).Value))
+        posVal = Trim$(CStr(wsP.Cells(r, portCols("Position")).Value))
+
+        If Len(coin) > 0 And StrComp(posVal, "Open", vbTextCompare) = 0 Then
+            sym = MapCoinToBinanceSymbol(coin)
+
+            If dayCutoffUTC7 < todayUTC7 Then
+                ' Interpret the same calendar date as UTC for D1 close (Binance daily candles are UTC-aligned).
+                Dim dayUTC As Date: dayUTC = DateValue(cutoffUTC7)
+                px = GetBinanceDailyCloseUTC(sym, dayUTC)
+            Else
+                px = GetBinanceRealtimePrice(sym)
+            End If
+
+            ' Fallback to USDC/BUSD if USDT primary failed
+            If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
+                px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
+            End If
+
+            ' Stablecoin -> 1
+            If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(coin) Then px = 1#
+
+            ' Write or clear
+            If IsNumeric(px) And px > 0 Then
+                wsP.Cells(r, portCols("market price")).Value = CDbl(px)
+            Else
+                wsP.Cells(r, portCols("market price")).ClearContents
+            End If
+        End If
+    Next r
+
+    On Error Resume Next
+    wsP.Range(wsP.Cells(OUT_START, portCols("market price")), wsP.Cells(lastR, portCols("market price"))).NumberFormat = mod_config.PRICE_FMT
+    On Error GoTo 0
+
+    MsgBox "Market price updated for Open rows (UTC D1 close / realtime).", vbInformation
+Clean:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Error: " & Err.Description, vbExclamation
 End Sub
 
-' ========= Price Rules =========
-Private Function GetMarketPrice_ByRule(ByVal coin As String, ByVal cutoff As Date) As Double
-    If IsTodayUTC7(cutoff) And Mod_Config.ALLOW_FETCH_REALTIME_FOR_TODAY Then
-        ' TODO: plug in realtime provider, e.g. PriceRealtime(MapSymbol(coin))
-        GetMarketPrice_ByRule = 0#
-    ElseIf Mod_Config.ALLOW_FETCH_D1_CLOSE_FOR_PAST Then
-        ' TODO: plug in D1 close provider, e.g. PriceD1Close(MapSymbol(coin), DateValue(cutoff))
-        GetMarketPrice_ByRule = 0#
-    Else
-        GetMarketPrice_ByRule = 0#
-    End If
+
+' =========================== SESSION HELPERS =================================
+Private Function NewSession(ByVal coin As String, ByVal openDt As Date) As Object
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary"): d.CompareMode = vbTextCompare
+    d("Coin") = coin
+    d("OpenDate") = openDt
+    d("CloseDate") = Empty
+    d("BuyQty") = 0#
+    d("Cost") = 0#
+    d("SellQty") = 0#
+    d("SellProceeds") = 0#
+    d("AvailableQty") = 0#
+    d("Storage") = ""
+    d("StorageDate") = 0#
+    Set NewSession = d
 End Function
 
-Private Function MapSymbol(ByVal coin As String) As String
-    Dim up As String: up = UCase$(Trim$(coin))
-    If EndsWithAny(up, Mod_Config.SymbolSuffixFallbacks) Then
-        MapSymbol = up
-    Else
-        MapSymbol = up & "USDT"
+Private Sub UpdateLatestExchangeInSession(ByRef sess As Object, ByVal dt As Date, ByVal exch As String)
+    If NzD(sess("StorageDate")) = 0# Or dt >= sess("StorageDate") Then
+        sess("StorageDate") = dt
+        sess("Storage") = exch
     End If
+End Sub
+
+' Convert an Order_History timestamp (UTC-4) to UTC+7
+Private Function OrderToUTC7(ByVal dt As Date) As Date
+    OrderToUTC7 = dt + (mod_config.ORDERS_TZ_OFFSET_HOURS / 24#)
 End Function
 
-Private Function IsStable(ByVal coin As String) As Boolean
-    Dim s As Variant
-    For Each s In Mod_Config.Stablecoins
-        If UCase$(coin) = UCase$(CStr(s)) Then
-            IsStable = True
+
+' ====================== MAPPING / FORMATTING HELPERS =========================
+Private Function SheetByName(ByVal nm As String) As Worksheet
+    Dim ws As Worksheet
+    Dim target As String, cand As String
+
+    target = LCase$(Replace$(Replace$(Trim$(nm), " ", ""), "_", ""))
+
+    For Each ws In ThisWorkbook.Worksheets
+        If StrComp(ws.name, nm, vbTextCompare) = 0 Then
+            Set SheetByName = ws
             Exit Function
         End If
-    Next s
-End Function
+    Next ws
 
-' ========= Header Mapping / Utilities =========
-Private Function MapOrderHeaders(ws As Worksheet, ByRef hdr As OrderHeaderMap) As Boolean
-    Dim rH As Long: rH = Mod_Config.ORDERS_HEADER_ROW_DEFAULT
-    hdr.rowHeader = rH
-
-    Dim lastCol As Long
-    lastCol = ws.Cells(rH, ws.Columns.Count).End(xlToLeft).Column
-
-    Dim c As Long
-    For c = 1 To lastCol
-        Dim head As String: head = CStr(Nz(ws.Cells(rH, c).Value))
-        Dim n As String: n = NormalizeHeader(head)
-        If InAliases(n, Mod_Config.HDR_DATE_ALIASES) Then hdr.cDate = c
-        If InAliases(n, Mod_Config.HDR_TYPE_ALIASES) Then hdr.cType = c
-        If InAliases(n, Mod_Config.HDR_COIN_ALIASES) Then hdr.cCoin = c
-        If InAliases(n, Mod_Config.HDR_QTY_ALIASES) Then hdr.cQty = c
-        If InAliases(n, Mod_Config.HDR_PRICE_ALIASES) Then hdr.cPrice = c
-        If InAliases(n, Mod_Config.HDR_FEE_ALIASES) Then hdr.cFee = c
-        If InAliases(n, Mod_Config.HDR_EXCHANGE_ALIASES) Then hdr.cXchg = c
-        If InAliases(n, Mod_Config.HDR_TOTAL_ALIASES) Then hdr.cTotal = c
-    Next c
-
-    MapOrderHeaders = (hdr.cDate > 0 And hdr.cType > 0 And hdr.cCoin > 0 And hdr.cQty > 0)
-End Function
-
-Private Function TryReadCutoff(ws As Worksheet, ByRef cutoff As Date) As Boolean
-    Dim v As Variant: v = ws.Range(Mod_Config.CELL_CUTOFF).Value
-    If IsDate(v) Then
-        cutoff = CDate(v)
-        If Mod_Config.TREAT_DATE_ONLY_AS_END_OF_DAY Then
-            If Int(cutoff) = cutoff Then cutoff = cutoff + TimeSerial(23, 59, 59)
+    For Each ws In ThisWorkbook.Worksheets
+        cand = LCase$(Replace$(Replace$(Trim$(ws.name), " ", ""), "_", ""))
+        If cand = target Then
+            Set SheetByName = ws
+            Exit Function
         End If
-        TryReadCutoff = True
-    End If
+    Next ws
+
+    Set SheetByName = Nothing
 End Function
 
-Private Sub FindPositionTableColumns(ws As Worksheet, ByRef colCoin As Long, ByRef colPos As Long, ByRef colMkt As Long, ByRef colAvail As Long)
-    Dim r As Long: r = 4
-    Dim lastC As Long: lastC = ws.Cells(r, ws.Columns.Count).End(xlToLeft).Column
-    Dim c As Long
-    For c = 1 To lastC
-        Dim h As String: h = CStr(Nz(ws.Cells(r, c).Value))
-        Select Case NormalizeHeader(h)
-            Case "coin": colCoin = c
-            Case "position": colPos = c
-            Case "marketprice": colMkt = c
-            Case "availableqty": colAvail = c
-        End Select
-    Next c
+Private Function DetectPortfolioHeaderRow(ws As Worksheet) As Long
+    Dim r As Long, lastC As Long, raw As Object
+    For r = 1 To Application.Min(30, ws.Rows.Count)
+        lastC = ws.Cells(r, ws.Columns.Count).End(xlToLeft).Column
+        If lastC >= 1 Then
+            Set raw = BuildHeaderRaw(ws, r)
+            If (raw.Exists("position") Or raw.Exists("status") Or raw.Exists("state") Or raw.Exists("pos")) _
+               And raw.Exists("coin") Then
+                DetectPortfolioHeaderRow = r: Exit Function
+            End If
+        End If
+    Next r
+    DetectPortfolioHeaderRow = 0
+End Function
+
+' Auto-detect header row on Order_History (Date+Coin+Qty present)
+Private Function DetectOrderHeaderRow(ws As Worksheet, Optional ByVal defaultHeaderRow As Long = 2) As Long
+    Dim r As Long, raw As Object
+
+    Set raw = BuildHeaderRaw(ws, defaultHeaderRow)
+    If (raw.Exists("date") Or raw.Exists("time") Or raw.Exists("trade date") Or raw.Exists("open time")) _
+       And (raw.Exists("coin") Or raw.Exists("symbol") Or raw.Exists("asset") Or raw.Exists("ticker")) _
+       And (raw.Exists("qty") Or raw.Exists("quantity") Or raw.Exists("amount") Or raw.Exists("size")) Then
+        DetectOrderHeaderRow = defaultHeaderRow: Exit Function
+    End If
+
+    For r = 1 To Application.Min(10, ws.Rows.Count)
+        Set raw = BuildHeaderRaw(ws, r)
+        If (raw.Exists("date") Or raw.Exists("time") Or raw.Exists("trade date") Or raw.Exists("open time")) _
+           And (raw.Exists("coin") Or raw.Exists("symbol") Or raw.Exists("asset") Or raw.Exists("ticker")) _
+           And (raw.Exists("qty") Or raw.Exists("quantity") Or raw.Exists("amount") Or raw.Exists("size")) Then
+            DetectOrderHeaderRow = r: Exit Function
+        End If
+    Next r
+
+    DetectOrderHeaderRow = defaultHeaderRow
+End Function
+
+Private Sub EnsureMapped(ByVal d As Object, ByVal key As String)
+    If d Is Nothing Then Err.Raise 1004, , "Internal mapping is Nothing."
+    If Not d.Exists(key) Then Err.Raise 1004, , "Missing header (one of): " & key
+    If CLng(d(key)) < 1 Then Err.Raise 1004, , "Invalid column index for key: " & key
 End Sub
 
-' ========= Low-level helpers =========
-Private Function SheetByName(ByVal nm As String) As Worksheet
-    On Error Resume Next
-    Set SheetByName = ThisWorkbook.Worksheets(nm)
-    On Error GoTo 0
+Private Sub WriteCellSafe(ws As Worksheet, ByVal r As Long, ByVal c As Long, ByVal v As Variant)
+    If c >= 1 Then ws.Cells(r, c).Value = v
+End Sub
+
+Private Function BuildHeaderRaw(ByVal ws As Worksheet, ByVal headerRow As Long) As Object
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary"): d.CompareMode = vbTextCompare
+    Dim lastCol As Long: lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol < 1 Then lastCol = 1
+    Dim c As Long, key As String
+    For c = 1 To lastCol
+        key = NormalizeHeader(CStr(ws.Cells(headerRow, c).Value))
+        If key <> "" Then d(key) = c
+    Next c
+    Set BuildHeaderRaw = d
 End Function
 
-Private Function LastRowFast(ws As Worksheet, Optional ByCol As Long = 1) As Long
-    LastRowFast = ws.Cells(ws.Rows.Count, ByCol).End(xlUp).Row
+Private Function MapPortfolioHeaders(wsP As Worksheet, ByVal headerRow As Long) As Object
+    Dim raw As Object: Set raw = BuildHeaderRaw(wsP, headerRow)
+    Dim map As Object: Set map = CreateObject("Scripting.Dictionary"): map.CompareMode = vbTextCompare
+
+    map("Position") = RequireAny(raw, Array("position", "status", "state", "pos"))
+    map("Coin") = RequireAny(raw, Array("coin", "symbol", "asset", "ticker"))
+    map("Open date") = RequireAny(raw, Array("open date", "open"))
+    map("Close date") = RequireAny(raw, Array("close date", "close"))
+    map("Buy Qty") = RequireAny(raw, Array("buy qty", "buy quantity", "buyqty", "buy", "buy q"))
+    map("Cost") = RequireAny(raw, Array("cost", "buy cost", "total cost"))
+    map("Avg. cost") = RequireAny(raw, Array("avg cost", "avg. cost", "average cost"))
+    map("sell qty") = RequireAny(raw, Array("sell qty", "sell quantity", "sellqty", "sold qty", "sell q"))
+    map("sell proceeds") = RequireAny(raw, Array("sell proceeds", "net proceeds", "sell money", "sell value"))
+    map("avg sell price") = RequireAny(raw, Array("avg sell price", "average sell price"))
+    map("available qty") = RequireAny(raw, Array("available qty", "netqty", "available", "remain qty", "remaining qty"))
+
+    map("market price") = RequireAnyOptional(raw, Array("market price", "last price", "price"))
+    map("available balance") = RequireAnyOptional(raw, Array("available balance", "balance", "unrealized value", "market value"))
+    map("profit") = RequireAnyOptional(raw, Array("profit", "pnl", "p&l", "gain"))
+    map("%PnL") = RequireAnyOptional(raw, Array("%pnl", "pnl%", "percent pnl", "% pnl", "roi", "return %", "return pct"))
+    map("storage") = RequireAnyOptional(raw, Array("storage", "exchange", "venue", "wallet"))
+
+    If Not map.Exists("market price") Then map("market price") = 0
+    If Not map.Exists("available balance") Then map("available balance") = 0
+    If Not map.Exists("profit") Then map("profit") = 0
+    If Not map.Exists("%PnL") Then map("%PnL") = 0
+    If Not map.Exists("storage") Then map("storage") = 0
+
+    Set MapPortfolioHeaders = map
 End Function
 
-Private Function Nz(ByVal v As Variant, Optional ByVal ifNull As Variant = 0) As Variant
-    If IsError(v) Then
-        Nz = ifNull
-    ElseIf IsEmpty(v) Then
-        Nz = ifNull
-    ElseIf VarType(v) = vbString And Len(v) = 0 Then
-        Nz = ifNull
-    Else
-        Nz = v
-    End If
-End Function
+Private Function MapOrderHeaders(ByVal ws As Worksheet, ByVal headerRow As Long) As Object
+    Dim raw As Object: Set raw = BuildHeaderRaw(ws, headerRow)
+    Dim map As Object: Set map = CreateObject("Scripting.Dictionary"): map.CompareMode = vbTextCompare
 
-Private Function IfNZ(colIdx As Long, ws As Worksheet, rowIdx As Long) As Variant
-    If colIdx > 0 Then
-        IfNZ = ws.Cells(rowIdx, colIdx).Value
-    Else
-        IfNZ = Empty
-    End If
-End Function
+    map("Date") = RequireAny(raw, Array("date", "time", "trade date", "open time"))
+    map("Type") = RequireAny(raw, Array("type", "side", "action"))
+    map("Coin") = RequireAny(raw, Array("coin", "symbol", "asset", "ticker", "pair base", "base"))
+    map("Qty") = RequireAny(raw, Array("qty", "quantity", "amount", "size"))
+    map("Price") = RequireAnyOptional(raw, Array("price", "unit price", "avg price", "fill price", "rate"))
+    map("Fee") = RequireAnyOptional(raw, Array("fee", "commission"))
+    map("Exchange") = RequireAnyOptional(raw, Array("exchange", "venue", "market", "wallet"))
+    map("Total") = RequireAnyOptional(raw, Array("total", "amount", "gross", "value"))
 
-Private Function IfNZText(colIdx As Long, ws As Worksheet, rowIdx As Long) As String
-    If colIdx > 0 Then
-        IfNZText = CStr(Nz(ws.Cells(rowIdx, colIdx).Value))
-    Else
-        IfNZText = vbNullString
-    End If
-End Function
 
-Private Function IsMissingVal(ByVal v As Variant) As Boolean
-    IsMissingVal = (IsEmpty(v) Or (VarType(v) = vbString And Len(v) = 0))
-End Function
+    If Not map.Exists("Price") Then map("Price") = 0
+    If Not map.Exists("Fee") Then map("Fee") = 0
+    If Not map.Exists("Exchange") Then map("Exchange") = 0
+    If Not map.Exists("Total") Then map("Total") = 0
 
-Private Function SafeDiv(ByVal a As Double, ByVal b As Double) As Double
-    If b = 0 Then SafeDiv = 0 Else SafeDiv = a / b
+    Set MapOrderHeaders = map
 End Function
 
 Private Function NormalizeHeader(ByVal s As String) As String
-    Dim t As String
-    t = LCase$(Trim$(s))
-    t = Replace$(t, " ", "")
-    t = Replace$(t, "_", "")
-    t = Replace$(t, "-", "")
+    Dim t As String: t = s
+    t = Replace(t, Chr(160), " ")
+    t = Replace(t, vbCr, " ")
+    t = Replace(t, vbLf, " ")
+    t = Replace(t, vbTab, " ")
+    t = Replace(t, """", "")
+    t = Replace(t, "'", "")
+    t = Replace(t, ".", "")
+    t = LCase$(Trim$(t))
+    Do While InStr(t, "  ") > 0
+        t = Replace(t, "  ", " ")
+    Loop
     NormalizeHeader = t
 End Function
 
-Private Function InAliases(ByVal n As String, aliasesArr As Variant) As Boolean
-    Dim x As Variant
-    For Each x In aliasesArr
-        If n = NormalizeHeader(CStr(x)) Then
-            InAliases = True
-            Exit Function
-        End If
-    Next x
+Private Function RequireAny(ByVal dict As Object, ByVal aliases As Variant) As Long
+    Dim i As Long, k As String
+    For i = LBound(aliases) To UBound(aliases)
+        k = NormalizeHeader(CStr(aliases(i)))
+        If dict.Exists(k) Then RequireAny = dict(k): Exit Function
+    Next i
+    Err.Raise 1004, , "Missing header (one of): " & JoinAliases(aliases)
 End Function
 
-Private Function EndsWithAny(ByVal s As String, arr As Variant) As Boolean
-    Dim x As Variant
-    For Each x In arr
-        If Right$(s, Len(CStr(x))) = UCase$(CStr(x)) Then
-            EndsWithAny = True
-            Exit Function
-        End If
-    Next x
+Private Function RequireAnyOptional(ByVal dict As Object, ByVal aliases As Variant) As Long
+    Dim i As Long, k As String
+    For i = LBound(aliases) To UBound(aliases)
+        k = NormalizeHeader(CStr(aliases(i)))
+        If dict.Exists(k) Then RequireAnyOptional = dict(k): Exit Function
+    Next i
+    RequireAnyOptional = 0
 End Function
 
-Private Sub CopyKeys(src As Object, dst As Object)
-    Dim k As Variant
-    If (Not src Is Nothing) Then
-        For Each k In src.keys
-            If Not dst.Exists(k) Then dst.Add k, True
+Private Function JoinAliases(ByVal aliases As Variant) As String
+    Dim i As Long, arr() As String
+    ReDim arr(LBound(aliases) To UBound(aliases))
+    For i = LBound(aliases) To UBound(aliases)
+        arr(i) = CStr(aliases(i))
+    Next i
+    JoinAliases = Join(arr, " | ")
+End Function
+
+Private Sub ClearPortfolioOutput(ws As Worksheet, ByVal portCols As Object, ByVal headerRow As Long, ByVal outStart As Long)
+    Dim lastR As Long: lastR = LastRowIn(ws, portCols("Coin"), headerRow)
+    If lastR < outStart Then lastR = outStart
+    Dim k As Variant, col As Long
+    For Each k In portCols.Keys
+        col = portCols(k)
+        If col > 0 Then
+            If LCase$(CStr(k)) = "market price" And Not mod_config.CLEAR_MARKET_PRICE Then
+                ' keep
+            Else
+                ws.Range(ws.Cells(outStart, col), ws.Cells(lastR, col)).ClearContents
+            End If
+        End If
+    Next k
+End Sub
+
+Private Function LastRowIn(ws As Worksheet, ByVal col As Long, ByVal headerRow As Long) As Long
+    If col < 1 Then
+        Dim f As Range
+        Set f = ws.Cells.Find(What:="*", LookIn:=xlFormulas, LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
+        If f Is Nothing Then LastRowIn = headerRow Else LastRowIn = f.Row
+    ElseIf Application.WorksheetFunction.CountA(ws.Columns(col)) = 0 Then
+        LastRowIn = headerRow
+    Else
+        LastRowIn = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+    End If
+End Function
+
+Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByVal headerRow As Long, ByVal outStart As Long)
+    If lastRow < outStart Then Exit Sub
+    On Error Resume Next
+    ws.Range(ws.Cells(outStart, portCols("Buy Qty")), ws.Cells(lastRow, portCols("Buy Qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
+    ws.Range(ws.Cells(outStart, portCols("sell qty")), ws.Cells(lastRow, portCols("sell qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
+    ws.Range(ws.Cells(outStart, portCols("available qty")), ws.Cells(lastRow, portCols("available qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
+
+    ws.Range(ws.Cells(outStart, portCols("Cost")), ws.Cells(lastRow, portCols("Cost"))).NumberFormat = mod_config.MONEY_FMT
+    ws.Range(ws.Cells(outStart, portCols("sell proceeds")), ws.Cells(lastRow, portCols("sell proceeds"))).NumberFormat = mod_config.MONEY_FMT
+    ws.Range(ws.Cells(outStart, portCols("Avg. cost")), ws.Cells(lastRow, portCols("Avg. cost"))).NumberFormat = mod_config.PRICE_FMT
+    If portCols("available balance") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("available balance")), ws.Cells(lastRow, portCols("available balance"))).NumberFormat = mod_config.MONEY_FMT
+    If portCols("profit") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("profit")), ws.Cells(lastRow, portCols("profit"))).NumberFormat = mod_config.MONEY_FMT
+
+    If portCols("market price") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("market price")), ws.Cells(lastRow, portCols("market price"))).NumberFormat = mod_config.PRICE_FMT
+    ws.Range(ws.Cells(outStart, portCols("avg sell price")), ws.Cells(lastRow, portCols("avg sell price"))).NumberFormat = mod_config.PRICE_FMT
+    If portCols("%PnL") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("%PnL")), ws.Cells(lastRow, portCols("%PnL"))).NumberFormat = mod_config.PCT_FMT
+
+    ws.Range(ws.Cells(outStart, portCols("Open date")), ws.Cells(lastRow, portCols("Open date"))).NumberFormat = mod_config.DATE_FMT
+    ws.Range(ws.Cells(outStart, portCols("Close date")), ws.Cells(lastRow, portCols("Close date"))).NumberFormat = mod_config.DATE_FMT
+
+    ws.Range(ws.Cells(headerRow, MinCol(portCols)), ws.Cells(lastRow, MaxCol(portCols))).EntireColumn.AutoFit
+    On Error GoTo 0
+End Sub
+
+
+' ========================== PRICE FETCH HELPERS ==============================
+Private Function HttpGet(ByVal url As String) As String
+    On Error GoTo Fail
+    Dim o As Object: Set o = CreateObject("MSXML2.XMLHTTP")
+    o.Open "GET", url, False
+    o.setRequestHeader "Accept", "application/json"
+    o.setRequestHeader "User-Agent", "ExcelVBA-Binance/1.0"
+    o.send
+    If o.readyState = 4 And o.Status = 200 Then
+        HttpGet = CStr(o.responseText)
+    Else
+        HttpGet = ""
+    End If
+    Exit Function
+Fail:
+    HttpGet = ""
+End Function
+
+Private Function ParseTickerPriceFromJson(ByVal s As String) As Double
+    Dim i As Long, j As Long
+    i = InStr(1, s, """price""", vbTextCompare): If i = 0 Then Exit Function
+    i = InStr(i, s, ":", vbTextCompare): If i = 0 Then Exit Function
+    i = InStr(i, s, """", vbTextCompare): If i = 0 Then Exit Function
+    j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then Exit Function
+    ParseTickerPriceFromJson = Val(Mid$(s, i + 1, j - i - 1))
+End Function
+
+' Parse first kline's close from Binance klines JSON
+Private Function ParseFirstKlineCloseFromJson(ByVal s As String) As Double
+    Dim a As Long, b As Long, inner As String, parts() As String
+    a = InStr(1, s, "[[", vbTextCompare): If a = 0 Then Exit Function
+    b = InStr(a + 2, s, "]]", vbTextCompare): If b = 0 Then Exit Function
+    inner = Mid$(s, a + 2, b - a - 2)
+    parts = Split(inner, ",")
+    If UBound(parts) >= 4 Then ParseFirstKlineCloseFromJson = Val(Replace$(Replace$(parts(4), """", ""), " ", ""))
+End Function
+
+Private Function MapCoinToBinanceSymbol(ByVal coin As String) As String
+    Dim c As String: c = UCase$(Trim$(coin))
+    c = Replace$(c, "/", "")
+    c = Replace$(c, "-", "")
+    If Right$(c, 4) = "USDT" Or Right$(c, 4) = "USDC" Or Right$(c, 4) = "BUSD" Then
+        MapCoinToBinanceSymbol = c
+    Else
+        MapCoinToBinanceSymbol = c & "USDT"
+    End If
+End Function
+
+Private Function IsStableCoin(ByVal coin As String) As Boolean
+    Dim c As String: c = UCase$(Trim$(coin))
+    IsStableCoin = (c = "USDT" Or c = "USDC" Or c = "BUSD" Or c = "FDUSD" Or c = "TUSD")
+End Function
+
+Private Function GetBinanceRealtimePrice(ByVal symbol As String) As Variant
+    On Error GoTo Fail
+    Dim s As String: s = HttpGet("https://api.binance.com/api/v3/ticker/price?symbol=" & symbol)
+    If Len(s) = 0 Then GoTo Fail
+    Dim p As Double: p = ParseTickerPriceFromJson(s)
+    If p > 0 Then GetBinanceRealtimePrice = p Else GetBinanceRealtimePrice = Empty
+    Exit Function
+Fail:
+    GetBinanceRealtimePrice = Empty
+End Function
+
+' Epoch milliseconds as string (prevents 32-bit overflow)
+Private Function MsSinceEpochUTC(ByVal dt As Date) As String
+    MsSinceEpochUTC = Format$(CDbl((dt - #1/1/1970#) * 86400000#), "0")
+End Function
+
+' Get the D1 close for a given UTC calendar day (Binance D1 is UTC-aligned).
+Private Function GetBinanceDailyCloseUTC(ByVal symbol As String, ByVal dayUTC As Date) As Variant
+    On Error GoTo Fail
+
+    ' UTC window: [dayUTC 00:00, next 00:00)
+    Dim startUtc As Date, endUtc As Date
+    startUtc = DateSerial(Year(dayUTC), Month(dayUTC), Day(dayUTC))
+    endUtc = DateSerial(Year(dayUTC), Month(dayUTC), Day(dayUTC) + 1)
+
+    Dim startMs As String, endMs As String
+    startMs = MsSinceEpochUTC(startUtc)
+    endMs = MsSinceEpochUTC(endUtc)
+
+    Dim url As String, s As String, closeP As Double
+
+    ' Preferred: startTime + limit=1
+    url = "https://api.binance.com/api/v3/klines?symbol=" & symbol & _
+          "&interval=1d&startTime=" & startMs & "&limit=1"
+    s = HttpGet(url)
+    closeP = ParseFirstKlineCloseFromJson(s)
+    If closeP > 0 Then GetBinanceDailyCloseUTC = closeP: Exit Function
+
+    ' Fallback: endTime + limit=1
+    url = "https://api.binance.com/api/v3/klines?symbol=" & symbol & _
+          "&interval=1d&endTime=" & endMs & "&limit=1"
+    s = HttpGet(url)
+    closeP = ParseFirstKlineCloseFromJson(s)
+    If closeP > 0 Then GetBinanceDailyCloseUTC = closeP: Exit Function
+
+    GetBinanceDailyCloseUTC = Empty
+    Exit Function
+Fail:
+    GetBinanceDailyCloseUTC = Empty
+End Function
+
+' Fallback for USDT->USDC/BUSD using same UTC-day logic
+Private Function GetFallbackRealtimeOrCloseUTC(ByVal usdtSym As String, ByVal dayCutoffUTC7 As Date, ByVal todayUTC7 As Date) As Variant
+    Dim base As String: base = Left$(usdtSym, Len(usdtSym) - 4)
+    Dim px As Variant, qv As Variant, alt As String
+
+    For Each qv In Array("USDC", "BUSD")
+        alt = base & CStr(qv)
+        If dayCutoffUTC7 < todayUTC7 Then
+            Dim dayUTC As Date: dayUTC = dayCutoffUTC7   ' interpret as UTC day
+            px = GetBinanceDailyCloseUTC(alt, dayUTC)
+        Else
+            px = GetBinanceRealtimePrice(alt)
+        End If
+        If IsNumeric(px) And px > 0 Then GetFallbackRealtimeOrCloseUTC = px: Exit Function
+    Next qv
+
+    GetFallbackRealtimeOrCloseUTC = Empty
+End Function
+
+
+' ========================= CUTOFF PARSER HELPERS =============================
+' Read cutoff from Position!B3 (UTC+7). Returns True if a valid datetime was parsed.
+Private Function GetCutoffFromPositionB3(ByRef outDt As Date) As Boolean
+    Dim v As Variant
+    v = ThisWorkbook.Worksheets(mod_config.SHEET_PORTFOLIO).Range(mod_config.CELL_CUTOFF).Value
+    GetCutoffFromPositionB3 = TryParseDateTimeFlexible(v, outDt)
+End Function
+
+' Flexible datetime parser (keeps time if present).
+' Accepts: yyyy-mm-dd[ hh:mm[:ss]], dd/mm/yyyy[ hh:mm], dd-mm-yyyy, 2025.08.31, Excel serial, etc.
+Private Function TryParseDateTimeFlexible(ByVal v As Variant, ByRef dt As Date) As Boolean
+    On Error GoTo Nope
+
+    If IsDate(v) Then
+        dt = CDate(v): TryParseDateTimeFlexible = True: Exit Function
+    End If
+
+    If IsNumeric(v) Then
+        dt = CDate(v): TryParseDateTimeFlexible = True: Exit Function
+    End If
+
+    If VarType(v) = vbString Then
+        Dim t As String: t = Trim$(CStr(v))
+        If t = "" Then GoTo Nope
+
+        t = Replace$(t, "\", "/")
+        t = Replace$(t, "-", "/")
+        t = Replace$(t, ".", "/")
+
+        On Error Resume Next
+        dt = CDate(t)
+        If Err.Number = 0 Then TryParseDateTimeFlexible = True: Exit Function
+        Err.Clear
+
+        Dim a() As String: a = Split(Split(t, " ")(0), "/")
+        If UBound(a) = 2 Then
+            Dim yy As Long, mm As Long, dd As Long, tm As String
+            tm = ""
+            If InStr(t, " ") > 0 Then tm = Trim$(Mid$(t, InStr(t, " ") + 1))
+
+            If Len(a(0)) = 4 Then
+                yy = CLng(a(0)): mm = CLng(a(1)): dd = CLng(a(2))   ' yyyy/mm/dd
+            Else
+                yy = CLng(a(2)): mm = CLng(a(1)): dd = CLng(a(0))   ' dd/mm/yyyy
+            End If
+
+            If tm <> "" Then
+                dt = CDate(Format$(DateSerial(yy, mm, dd), "yyyy-mm-dd") & " " & tm)
+            Else
+                dt = DateSerial(yy, mm, dd)
+            End If
+            TryParseDateTimeFlexible = True: Exit Function
+        End If
+        On Error GoTo 0
+    End If
+
+Nope:
+    TryParseDateTimeFlexible = False
+End Function
+
+
+' ============================== MISC HELPERS =================================
+Private Function NzD(v As Variant) As Double
+    If IsError(v) Or IsEmpty(v) Or v = "" Then NzD = 0# Else NzD = CDbl(v)
+End Function
+
+Private Function MinCol(d As Object) As Long
+    Dim c As Long, k As Variant: c = 1000000
+    For Each k In d.Keys
+        If d(k) > 0 Then If d(k) < c Then c = d(k)
+    Next k
+    MinCol = c
+End Function
+
+Private Function MaxCol(d As Object) As Long
+    Dim c As Long, k As Variant: c = 0
+    For Each k In d.Keys
+        If d(k) > c Then c = d(k)
+    Next k
+    MaxCol = c
+End Function
+
+' Excel ROUND: half away from zero
+Private Function RoundN(ByVal v As Variant, ByVal n As Long) As Variant
+    If IsNumeric(v) Then
+        RoundN = Application.WorksheetFunction.Round(CDbl(v), n)
+    Else
+        RoundN = v
+    End If
+End Function
+
+
+
+Public Sub Take_Daily_Snapshot()
+    On Error GoTo Fail
+
+    Dim wsP As Worksheet, wsS As Worksheet
+    Set wsP = SheetByName(SHEET_PORTFOLIO)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & SHEET_PORTFOLIO & "' not found."
+
+    ' Ensure target sheet exists with correct name
+    Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
+    If wsS Is Nothing Then
+        Set wsS = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        wsS.name = mod_config.SHEET_SNAPSHOT
+    End If
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    ' Snapshot date from Position!B3 (UTC+7); fallback to today if invalid
+    Dim snapDt As Date
+    If Not GetCutoffFromPositionB3(snapDt) Then snapDt = Date
+    snapDt = DateValue(snapDt) ' only date
+
+    ' Read dashboard totals from Position (d�ng constants d� khai b�o trong module)
+    Dim cashVal As Variant, coinVal As Variant, navVal As Variant
+    Dim depVal As Variant, wdrVal As Variant, pnlVal As Variant
+
+    cashVal = wsP.Range(mod_config.CELL_CASH).Value
+    coinVal = wsP.Range(mod_config.CELL_COIN).Value
+    navVal = wsP.Range(mod_config.CELL_NAV).Value
+    depVal = wsP.Range(mod_config.CELL_SUM_DEPOSIT).Value
+    wdrVal = wsP.Range(mod_config.CELL_SUM_WITHDRAW).Value
+    pnlVal = wsP.Range(mod_config.CELL_TOTAL_PNL).Value
+
+    ' ---------- Build "holdings string" from Position (Open rows) ----------
+    Dim hdrP As Long: hdrP = DetectPortfolioHeaderRow(wsP)
+    If hdrP = 0 Then Err.Raise 1004, , "Cannot find header row on '" & mod_config.SHEET_PORTFOLIO & "'."
+    Dim OUT_START As Long: OUT_START = hdrP + OUTPUT_OFFSET_ROWS
+    Dim portCols As Object: Set portCols = MapPortfolioHeaders(wsP, hdrP)
+
+    Dim lastPos As Long: lastPos = LastRowIn(wsP, portCols("Coin"), hdrP)
+
+    Dim holdDict As Object: Set holdDict = CreateObject("Scripting.Dictionary")
+    holdDict.CompareMode = vbTextCompare
+
+    Dim r As Long, posTxt As String, coin As String
+    Dim availBal As Double, qty As Double, mkt As Double
+
+    For r = OUT_START To lastPos
+        posTxt = Trim$(CStr(wsP.Cells(r, portCols("Position")).Value))
+        If LCase$(posTxt) = "open" Then
+            coin = Trim$(CStr(wsP.Cells(r, portCols("Coin")).Value))
+            If coin <> "" Then
+                ' Try available balance; if blank, compute qty*price
+                availBal = 0#
+                If portCols("available balance") > 0 Then
+                    If IsNumeric(wsP.Cells(r, portCols("available balance")).Value) Then
+                        availBal = CDbl(wsP.Cells(r, portCols("available balance")).Value)
+                    End If
+                End If
+                If availBal = 0# Then
+                    qty = 0#: mkt = 0#
+                    If portCols("available qty") > 0 And IsNumeric(wsP.Cells(r, portCols("available qty")).Value) Then _
+                        qty = CDbl(wsP.Cells(r, portCols("available qty")).Value)
+                    If portCols("market price") > 0 And IsNumeric(wsP.Cells(r, portCols("market price")).Value) Then _
+                        mkt = CDbl(wsP.Cells(r, portCols("market price")).Value)
+                    availBal = qty * mkt
+                End If
+
+                If availBal > 0 Then
+                    If holdDict.Exists(coin) Then
+                        holdDict(coin) = holdDict(coin) + availBal
+                    Else
+                        holdDict(coin) = availBal
+                    End If
+                End If
+            End If
+        End If
+    Next r
+
+    ' Compose "COIN: value" string with thousand separators
+    Dim holdingsStr As String: holdingsStr = ""
+    If holdDict.Count > 0 Then
+        Dim k As Variant, formatted As String
+        For Each k In holdDict.Keys
+            formatted = Format(holdDict(k), "#,##0")
+            If Len(holdingsStr) > 0 Then holdingsStr = holdingsStr & "; "
+            holdingsStr = holdingsStr & CStr(UCase$(k)) & ": " & formatted
+
         Next k
     End If
-End Sub
 
-Private Sub PushSession(ByRef arr() As SessionRow, ByRef idx As Long, ByRef s As SessionRow)
-    If idx = 0 Then
-        ReDim arr(0 To 0)
-    Else
-        ReDim Preserve arr(0 To idx)
+    ' ---------- Prepare headers if empty ----------
+    If Application.WorksheetFunction.CountA(wsS.Rows(1)) = 0 Then
+        wsS.Cells(1, 1).Value = "Date"            ' A1
+        wsS.Cells(1, 2).Value = "Cash"            ' B1
+        wsS.Cells(1, 3).Value = "Coin"            ' C1
+        wsS.Cells(1, 4).Value = "NAV"             ' D1
+        wsS.Cells(1, 5).Value = "Total deposit"   ' E1
+        wsS.Cells(1, 6).Value = "Total withdraw"  ' F1
+        wsS.Cells(1, 7).Value = "Total profit"    ' G1
+        wsS.Cells(1, 8).Value = "Holdings"        ' H1  (Coin:value, ...)
+        wsS.Range("A1:H1").Font.Bold = True
+        wsS.Columns("A").NumberFormat = mod_config.SNAPSHOT_DATE_FMT
+        wsS.Columns("B:G").NumberFormat = mod_config.SNAPSHOT_NUMBER_FMT
+        wsS.Columns("H").NumberFormat = "@"       ' text
     End If
-    arr(idx) = s
-    idx = idx + 1
-End Sub
 
-Private Sub AggAssignSessions(ByRef agg As PortfolioAggregate, ByRef arr() As SessionRow)
-    If (Not (Not arr)) Then
-        agg.Sessions = arr
-    Else
-        Erase agg.Sessions
+    ' ---------- UPSERT: t�m d�ng c� Date = snapDt ----------
+    Dim lastRow As Long, writeRow As Long, found As Boolean
+    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    found = False
+    If lastRow >= 2 Then
+        For r = 2 To lastRow
+            If IsDate(wsS.Cells(r, 1).Value) Then
+                If DateValue(wsS.Cells(r, 1).Value) = snapDt Then
+                    writeRow = r
+                    found = True
+                    Exit For
+                End If
+            End If
+        Next r
     End If
+    If Not found Then writeRow = lastRow + 1
+
+    ' ---------- Write snapshot row ----------
+    wsS.Cells(writeRow, 1).Value = snapDt
+    wsS.Cells(writeRow, 2).Value = Round(cashVal, 0)
+    wsS.Cells(writeRow, 3).Value = Round(coinVal, 0)
+    wsS.Cells(writeRow, 4).Value = Round(navVal, 0)
+    wsS.Cells(writeRow, 5).Value = Round(depVal, 0)
+    wsS.Cells(writeRow, 6).Value = Round(wdrVal, 0)
+    wsS.Cells(writeRow, 7).Value = Round(pnlVal, 0)
+    wsS.Cells(writeRow, 8).Value = holdingsStr
+
+    ' ---------- Sort by Date ascending ----------
+    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    If lastRow > 2 Then
+        wsS.Sort.SortFields.Clear
+        wsS.Sort.SortFields.Add key:=wsS.Range("A2:A" & lastRow), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        With wsS.Sort
+            .SetRange wsS.Range("A1:H" & lastRow)
+            .Header = xlYes
+            .MatchCase = False
+            .Orientation = xlTopToBottom
+            .Apply
+        End With
+    End If
+
+    wsS.Columns("A:H").AutoFit
+    MsgBox "Daily snapshot saved for " & Format$(snapDt, "yyyy-mm-dd"), vbInformation
+
+Clean:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Error (Take_Daily_Snapshot): " & Err.Description, vbExclamation
 End Sub
 
-Private Function IsTodayUTC7(ByVal dt As Date) As Boolean
-    IsTodayUTC7 = (DateSerial(Year(dt), Month(dt), Day(dt)) = Date)
+' ============================= SNAPSHOT HELPER ===============================
+Private Function SafeRead(ws As Worksheet, ByVal r As Long, ByVal c As Long) As Variant
+    If c >= 1 Then
+        SafeRead = ws.Cells(r, c).Value
+    Else
+        SafeRead = vbNullString
+    End If
 End Function
-
 
