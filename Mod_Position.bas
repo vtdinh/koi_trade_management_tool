@@ -1,6 +1,9 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
 
+' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
+Private gSuppressPositionMsg As Boolean
+
 ' Uses global config from mod_config.bas
 Private Const OUTPUT_OFFSET_ROWS As Long = 1
 
@@ -385,7 +388,7 @@ Public Sub Update_All_Position()
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
-    If Len(statusMsg) > 0 Then MsgBox statusMsg, vbInformation
+    If (Not gSuppressPositionMsg) And Len(statusMsg) > 0 Then MsgBox statusMsg, vbInformation
     Exit Sub
 
 Fail:
@@ -1655,5 +1658,79 @@ Private Function SafeRead(ws As Worksheet, ByVal r As Long, ByVal c As Long) As 
     Else
         SafeRead = vbNullString
     End If
+End Function
+
+' =============================================================================
+' ========================= BATCH SNAPSHOT UPDATER ============================
+' =============================================================================
+' Update all missing daily snapshots from Daily_Snapshot!A2 (start date)
+' up to the current cutoff date on Position!B3. Creates rows only for
+' missing dates; existing dates are left unchanged.
+Public Sub Update_All_Snapshot()
+    On Error GoTo Fail
+
+    Dim wsP As Worksheet, wsS As Worksheet
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+    Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
+    If wsS Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_SNAPSHOT & "' not found."
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    Dim cutoff As Date
+    If Not GetCutoffFromPositionB3(cutoff) Then Err.Raise 1004, , "Invalid cutoff at Position!" & mod_config.CELL_CUTOFF
+    cutoff = DateValue(cutoff)
+
+    Dim startDate As Date
+    If IsDate(wsS.Cells(2, 1).Value) Then
+        startDate = DateValue(wsS.Cells(2, 1).Value)
+    Else
+        Err.Raise 1004, , "Daily_Snapshot!A2 must contain a start date."
+    End If
+    If startDate > cutoff Then GoTo Clean ' nothing to do
+
+    ' Build a set of existing dates to avoid overwriting
+    Dim exists As Object: Set exists = CreateObject("Scripting.Dictionary")
+    exists.CompareMode = vbTextCompare
+    Dim lastRow As Long: lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    Dim r As Long
+    For r = 2 To lastRow
+        If IsDate(wsS.Cells(r, 1).Value) Then exists(AddDateKey(DateValue(wsS.Cells(r, 1).Value))) = True
+    Next r
+
+    Dim originalCutoff As Variant
+    originalCutoff = wsP.Range(mod_config.CELL_CUTOFF).Value
+
+    Dim d As Date
+    gSuppressPositionMsg = True
+    For d = startDate To cutoff
+        If Not exists.Exists(AddDateKey(d)) Then
+            ' Rebuild Position for date d by setting cutoff and running full update
+            wsP.Range(mod_config.CELL_CUTOFF).Value = d
+            Update_All_Position
+            ' Take snapshot for this date
+            Take_Daily_Snapshot
+        End If
+    Next d
+    gSuppressPositionMsg = False
+
+    ' Restore original cutoff
+    wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoff
+
+Clean:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    gSuppressPositionMsg = False
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Error (Update_All_Snapshot): " & Err.Description, vbExclamation
+End Sub
+
+Private Function AddDateKey(ByVal d As Date) As String
+    AddDateKey = Format$(d, "yyyy-mm-dd")
 End Function
 

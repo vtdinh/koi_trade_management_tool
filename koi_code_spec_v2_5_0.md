@@ -1,4 +1,4 @@
-# KOI Trading Portfolio Workbook Spec (v2.4.0)
+# KOI Trading Portfolio Workbook Spec (v2.5.0)
 Generated: 2025-09-05
 
 ## Overview
@@ -8,6 +8,7 @@ Core macros
 - Update_All_Position: rebuilds Position table up to the cutoff, computes Cash/Coin/NAV, Deposit/Withdraw/Total PnL, formats the sheet, and updates charts (Cash vs Coin, Portfolio1, Portfolio2). Shows a single final message on completion.
 - Update_MarketPrice_ByCutoff_OpenOnly_Simple: updates Market Price for Open rows only using cutoff rules (see Time & Cutoff). Stablecoins are priced at 1.
 - Take_Daily_Snapshot: upserts a row per date into Daily_Snapshot (see layout below).
+- Update_All_Snapshot: fills all missing daily snapshot rows from Daily_Snapshot!A2 (start date) to Position!B3 (cutoff). For each missing date it sets the cutoff, rebuilds Position (silent), writes the snapshot, then restores the original cutoff.
 
 ## Sheets & Key Cells
 ### Position (SHEET_PORTFOLIO)
@@ -39,6 +40,11 @@ Core macros
 ### Daily_Snapshot (SHEET_SNAPSHOT)
 - Structure (A:L): Date | Cash | Coin | NAV | Total deposit | Total withdraw | Total profit | BTC | Alt.TOP | Alt.MID | Alt.LOW | Holdings
 - UPSERT by Date; sorted ascending; formats: yyyy-mm-dd and #,##0; Holdings is plain text.
+
+#### Bulk Snapshot Update
+- Start date: place the first date to backfill in `Daily_Snapshot!A2`.
+- Cutoff date: set target date in `Position!B3`.
+- Run `Update_All_Snapshot`: creates rows for any missing dates between A2 and the cutoff. Existing dates are left unchanged.
 
 ## Time & Cutoff Rules
 - Order_History timestamps = UTC-4; converted to UTC+7 via +11h.
@@ -103,7 +109,8 @@ Core macros
 - Update_All_Position shows only one final message on completion.
 
 ## Version History
-- v2.4.0: Added automatic chart updates (Cash vs Coin, Portfolio1 groups, Portfolio2 per-coin), Category sheet support for both layouts, single final message from Update_All_Position. Daily_Snapshot expanded to include group totals and Holdings string.
-- v2.3.0: Added Deposit/Withdraw/Total P&L aggregates, expanded Daily_Snapshot, clarified pricing/timezone.
+- v2.5.0: Added Update_All_Snapshot (bulk daily backfill), standardized Daily_Snapshot A:L layout with group totals + Holdings string, chart reset to "No holdings" when empty, single-message run mode.
+- v2.4.x: Automatic chart updates (Cash vs Coin, Portfolio1 groups, Portfolio2 per-coin), Category sheet dual-layout support.
+- v2.3.0: Deposit/Withdraw/Total P&L aggregates, expanded Daily_Snapshot, clarified pricing/timezone.
 - v2.2.x: Position builder, cutoff normalization, Binance pricing, %PnL coloring, header auto-detection, stablecoin handling.
 
