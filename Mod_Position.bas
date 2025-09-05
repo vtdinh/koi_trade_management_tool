@@ -704,7 +704,11 @@ Private Function ApplyPortfolioSeriesToChart(ByVal ch As Chart, ByVal gVals As O
     vals = Array(CDbl(NzD(gVals("BTC"))), CDbl(NzD(gVals("Alt.TOP"))), CDbl(NzD(gVals("Alt.MID"))), CDbl(NzD(gVals("Alt.LOW"))))
 
     ' If all zeros, do not update (avoid pie issues)
-    If (vals(0) + vals(1) + vals(2) + vals(3)) <= 0 Then GoTo Fail
+    If (vals(0) + vals(1) + vals(2) + vals(3)) <= 0 Then
+        ResetPieChartToNoHoldings ch
+        ApplyPortfolioSeriesToChart = True
+        Exit Function
+    End If
 
     s.XValues = names
     s.Values = vals
@@ -834,8 +838,14 @@ End Sub
 
 Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Object)
     On Error GoTo Fail
-    If coinVals Is Nothing Then Exit Sub
-    If coinVals.Count = 0 Then Exit Sub
+    If coinVals Is Nothing Then
+        ResetPieChartToNoHoldings ch
+        Exit Sub
+    End If
+    If coinVals.Count = 0 Then
+        ResetPieChartToNoHoldings ch
+        Exit Sub
+    End If
 
     Dim s As Series
     If ch.SeriesCollection.Count = 0 Then
@@ -865,7 +875,10 @@ Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Objec
     For i = 1 To n
         sumV = sumV + vals(i)
     Next i
-    If sumV <= 0 Then Exit Sub
+    If sumV <= 0 Then
+        ResetPieChartToNoHoldings ch
+        Exit Sub
+    End If
 
     s.XValues = names
     s.Values = vals
@@ -910,6 +923,24 @@ Private Function CreatePortfolio2Chart(wsP As Worksheet) As ChartObject
 Fail:
     Set CreatePortfolio2Chart = Nothing
 End Function
+
+' When there are no open holdings, reset a pie chart to a single "No holdings" slice
+Private Sub ResetPieChartToNoHoldings(ByVal ch As Chart)
+    On Error Resume Next
+    Dim i As Long
+    For i = ch.SeriesCollection.Count To 1 Step -1
+        ch.SeriesCollection(i).Delete
+    Next i
+    Dim s As Series
+    Set s = ch.SeriesCollection.NewSeries
+    s.XValues = Array("No holdings")
+    s.Values = Array(1)
+    s.HasDataLabels = True
+    s.DataLabels.ShowCategoryName = True
+    s.DataLabels.ShowPercentage = True
+    s.DataLabels.ShowValue = False
+    s.DataLabels.NumberFormat = "0%"
+End Sub
 
 
 ' =========================== SESSION HELPERS =================================
@@ -1399,9 +1430,9 @@ End Function
 Public Sub Take_Daily_Snapshot()
     On Error GoTo Fail
 
-    Dim wsP As Worksheet, wsS As Worksheet
-    Set wsP = SheetByName(SHEET_PORTFOLIO)
-    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & SHEET_PORTFOLIO & "' not found."
+    Dim wsP As Worksheet, wsS As Worksheet, wsC As Worksheet
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
 
     ' Ensure target sheet exists with correct name
     Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
@@ -1429,7 +1460,7 @@ Public Sub Take_Daily_Snapshot()
     wdrVal = wsP.Range(mod_config.CELL_SUM_WITHDRAW).Value
     pnlVal = wsP.Range(mod_config.CELL_TOTAL_PNL).Value
 
-    ' ---------- Build "holdings string" from Position (Open rows) ----------
+    ' ---------- Build holdings from Position (Open rows) ----------
     Dim hdrP As Long: hdrP = DetectPortfolioHeaderRow(wsP)
     If hdrP = 0 Then Err.Raise 1004, , "Cannot find header row on '" & mod_config.SHEET_PORTFOLIO & "'."
     Dim OUT_START As Long: OUT_START = hdrP + OUTPUT_OFFSET_ROWS
@@ -1475,33 +1506,85 @@ Public Sub Take_Daily_Snapshot()
         End If
     Next r
 
-    ' Compose "COIN: value" string with thousand separators
+    ' Compose "COIN: value" string with thousand separators (sorted by value desc)
     Dim holdingsStr As String: holdingsStr = ""
     If holdDict.Count > 0 Then
-        Dim k As Variant, formatted As String
+        Dim nHold As Long: nHold = holdDict.Count
+        Dim keysArr() As Variant, valsArr() As Double
+        ReDim keysArr(1 To nHold)
+        ReDim valsArr(1 To nHold)
+        Dim k As Variant, idxH As Long: idxH = 1
         For Each k In holdDict.Keys
-            formatted = Format(holdDict(k), "#,##0")
-            If Len(holdingsStr) > 0 Then holdingsStr = holdingsStr & "; "
-            holdingsStr = holdingsStr & CStr(UCase$(k)) & ": " & formatted
-
+            keysArr(idxH) = CStr(UCase$(k))
+            valsArr(idxH) = CDbl(holdDict(k))
+            idxH = idxH + 1
         Next k
+        ' Simple selection sort by value desc
+        Dim iH As Long, jH As Long
+        For iH = 1 To nHold - 1
+            Dim maxIdx As Long: maxIdx = iH
+            For jH = iH + 1 To nHold
+                If valsArr(jH) > valsArr(maxIdx) Then maxIdx = jH
+            Next jH
+            If maxIdx <> iH Then
+                Dim tv As Double, ts As Variant
+                tv = valsArr(iH): valsArr(iH) = valsArr(maxIdx): valsArr(maxIdx) = tv
+                ts = keysArr(iH): keysArr(iH) = keysArr(maxIdx): keysArr(maxIdx) = ts
+            End If
+        Next iH
+        For iH = 1 To nHold
+            If Len(holdingsStr) > 0 Then holdingsStr = holdingsStr & "; "
+            holdingsStr = holdingsStr & keysArr(iH) & ": " & Format(valsArr(iH), "#,##0")
+        Next iH
     End If
 
-    ' ---------- Prepare headers if empty ----------
-    If Application.WorksheetFunction.CountA(wsS.Rows(1)) = 0 Then
-        wsS.Cells(1, 1).Value = "Date"            ' A1
-        wsS.Cells(1, 2).Value = "Cash"            ' B1
-        wsS.Cells(1, 3).Value = "Coin"            ' C1
-        wsS.Cells(1, 4).Value = "NAV"             ' D1
-        wsS.Cells(1, 5).Value = "Total deposit"   ' E1
-        wsS.Cells(1, 6).Value = "Total withdraw"  ' F1
-        wsS.Cells(1, 7).Value = "Total profit"    ' G1
-        wsS.Cells(1, 8).Value = "Holdings"        ' H1  (Coin:value, ...)
-        wsS.Range("A1:H1").Font.Bold = True
-        wsS.Columns("A").NumberFormat = mod_config.SNAPSHOT_DATE_FMT
-        wsS.Columns("B:G").NumberFormat = mod_config.SNAPSHOT_NUMBER_FMT
-        wsS.Columns("H").NumberFormat = "@"       ' text
+    ' ---------- Build group totals (BTC/Alt.TOP/Alt.MID/Alt.LOW) ----------
+    Dim coinToGroup As Object
+    Set wsC = SheetByName(mod_config.SHEET_CATEGORY)
+    If wsC Is Nothing Then Set wsC = SheetByName("Category")
+    If wsC Is Nothing Then Set wsC = SheetByName("Categories")
+    If Not wsC Is Nothing Then
+        Set coinToGroup = BuildCoinToGroupFromCategorySheet(wsC)
+    Else
+        Set coinToGroup = CreateObject("Scripting.Dictionary"): coinToGroup.CompareMode = vbTextCompare
     End If
+
+    Dim gVals As Object: Set gVals = CreateObject("Scripting.Dictionary"): gVals.CompareMode = vbTextCompare
+    gVals("BTC") = 0#: gVals("Alt.TOP") = 0#: gVals("Alt.MID") = 0#: gVals("Alt.LOW") = 0#
+
+    If holdDict.Count > 0 Then
+        Dim ck As Variant, grp As String, val As Double
+        For Each ck In holdDict.Keys
+            val = CDbl(holdDict(ck))
+            If UCase$(CStr(ck)) = "BTC" Then
+                grp = "BTC"
+            ElseIf Not (coinToGroup Is Nothing) And coinToGroup.Exists(CStr(ck)) Then
+                grp = CStr(coinToGroup(ck))
+            Else
+                grp = "Alt.LOW"
+            End If
+            If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + val
+        Next ck
+    End If
+
+    ' ---------- Ensure headers (standardize to A:L layout) ----------
+    wsS.Cells(1, 1).Value = "Date"            ' A1
+    wsS.Cells(1, 2).Value = "Cash"            ' B1
+    wsS.Cells(1, 3).Value = "Coin"            ' C1 (total coin value)
+    wsS.Cells(1, 4).Value = "NAV"             ' D1
+    wsS.Cells(1, 5).Value = "Total deposit"   ' E1
+    wsS.Cells(1, 6).Value = "Total withdraw"  ' F1
+    wsS.Cells(1, 7).Value = "Total profit"    ' G1
+    wsS.Cells(1, 8).Value = "BTC"             ' H1
+    wsS.Cells(1, 9).Value = "Alt.TOP"         ' I1
+    wsS.Cells(1, 10).Value = "Alt.MID"        ' J1
+    wsS.Cells(1, 11).Value = "Alt.LOW"        ' K1
+    wsS.Cells(1, 12).Value = "Holdings"       ' L1 (Holdings string)
+    wsS.Range("A1:L1").Font.Bold = True
+    wsS.Columns("A").NumberFormat = mod_config.SNAPSHOT_DATE_FMT
+    wsS.Columns("B:G").NumberFormat = mod_config.SNAPSHOT_NUMBER_FMT
+    wsS.Columns("H:K").NumberFormat = mod_config.SNAPSHOT_NUMBER_FMT
+    wsS.Columns("L").NumberFormat = "@"       ' text
 
     ' ---------- UPSERT: t�m d�ng c� Date = snapDt ----------
     Dim lastRow As Long, writeRow As Long, found As Boolean
@@ -1521,6 +1604,8 @@ Public Sub Take_Daily_Snapshot()
     If Not found Then writeRow = lastRow + 1
 
     ' ---------- Write snapshot row ----------
+    ' Clear group/holdings cells for this row to avoid stale text from older layout
+    wsS.Range(wsS.Cells(writeRow, 8), wsS.Cells(writeRow, 12)).ClearContents
     wsS.Cells(writeRow, 1).Value = snapDt
     wsS.Cells(writeRow, 2).Value = Round(cashVal, 0)
     wsS.Cells(writeRow, 3).Value = Round(coinVal, 0)
@@ -1528,7 +1613,11 @@ Public Sub Take_Daily_Snapshot()
     wsS.Cells(writeRow, 5).Value = Round(depVal, 0)
     wsS.Cells(writeRow, 6).Value = Round(wdrVal, 0)
     wsS.Cells(writeRow, 7).Value = Round(pnlVal, 0)
-    wsS.Cells(writeRow, 8).Value = holdingsStr
+    wsS.Cells(writeRow, 8).Value = Round(NzD(gVals("BTC")), 0)
+    wsS.Cells(writeRow, 9).Value = Round(NzD(gVals("Alt.TOP")), 0)
+    wsS.Cells(writeRow, 10).Value = Round(NzD(gVals("Alt.MID")), 0)
+    wsS.Cells(writeRow, 11).Value = Round(NzD(gVals("Alt.LOW")), 0)
+    wsS.Cells(writeRow, 12).Value = holdingsStr
 
     ' ---------- Sort by Date ascending ----------
     lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
@@ -1537,7 +1626,7 @@ Public Sub Take_Daily_Snapshot()
         wsS.Sort.SortFields.Add key:=wsS.Range("A2:A" & lastRow), _
             SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
         With wsS.Sort
-            .SetRange wsS.Range("A1:H" & lastRow)
+            .SetRange wsS.Range("A1:L" & lastRow)
             .Header = xlYes
             .MatchCase = False
             .Orientation = xlTopToBottom
@@ -1545,7 +1634,7 @@ Public Sub Take_Daily_Snapshot()
         End With
     End If
 
-    wsS.Columns("A:H").AutoFit
+    wsS.Columns("A:L").AutoFit
     MsgBox "Daily snapshot saved for " & Format$(snapDt, "yyyy-mm-dd"), vbInformation
 
 Clean:
