@@ -16,6 +16,8 @@ Public Sub Update_All_Position()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
 
+    Dim statusMsg As String: statusMsg = vbNullString
+
     ' --- Detect headers
     Dim hdrP As Long: hdrP = DetectPortfolioHeaderRow(wsP)
     If hdrP = 0 Then Err.Raise 1004, , "Cannot find header row on '" & mod_config.SHEET_PORTFOLIO & "'."
@@ -55,7 +57,7 @@ Public Sub Update_All_Position()
         wsP.Range(mod_config.CELL_SUM_DEPOSIT).Value = vbNullString
         wsP.Range(mod_config.CELL_SUM_WITHDRAW).Value = vbNullString
         wsP.Range(mod_config.CELL_TOTAL_PNL).Value = vbNullString
-        MsgBox "No data in Order_History.", vbInformation
+        statusMsg = "No data in Order_History."
         GoTo Clean
     End If
 
@@ -220,6 +222,8 @@ Public Sub Update_All_Position()
     Dim mktPrice As Variant, availBal As Variant, profitVal As Variant, pnlPctVal As Variant
     Dim avgBuy As Variant, avgSell As Variant, posText As String
     Dim totalHoldValue As Double: totalHoldValue = 0#
+    ' Per-coin holdings for Portfolio2 chart
+    Dim coinVals As Object: Set coinVals = CreateObject("Scripting.Dictionary"): coinVals.CompareMode = vbTextCompare
 
     For i = 1 To sessions.Count
         Set ss = sessions(i)
@@ -287,6 +291,18 @@ Public Sub Update_All_Position()
         If portCols("available balance") > 0 Then _
             WriteCellSafe wsP, rowOut, portCols("available balance"), availBal
 
+        ' Accumulate per-coin value for open positions
+        If posText = "Open" Then
+            If IsNumeric(availBal) And CDbl(availBal) > 0 Then
+                Dim ckey As String: ckey = CStr(ss("Coin"))
+                If coinVals.Exists(ckey) Then
+                    coinVals(ckey) = CDbl(coinVals(ckey)) + CDbl(availBal)
+                Else
+                    coinVals(ckey) = CDbl(availBal)
+                End If
+            End If
+        End If
+
         ' Profit color
         If portCols("profit") > 0 Then
             WriteCellSafe wsP, rowOut, portCols("profit"), profitVal
@@ -335,13 +351,13 @@ Public Sub Update_All_Position()
     totalPnL = totalNAV - (sumDeposit - sumWithdraw)
 
     With wsP
-        .Range(CELL_CASH).Value = Round(totalCash, 0)
-        .Range(CELL_COIN).Value = Round(totalHoldValue, 0)
-        .Range(CELL_NAV).Value = Round(totalNAV, 0)
+        .Range(mod_config.CELL_CASH).Value = Round(totalCash, 0)
+        .Range(mod_config.CELL_COIN).Value = Round(totalHoldValue, 0)
+        .Range(mod_config.CELL_NAV).Value = Round(totalNAV, 0)
 
-        .Range(CELL_SUM_DEPOSIT).Value = Round(sumDeposit, 0)
-        .Range(CELL_SUM_WITHDRAW).Value = Round(sumWithdraw, 0)
-        .Range(CELL_TOTAL_PNL).Value = Round(totalPnL, 0)
+        .Range(mod_config.CELL_SUM_DEPOSIT).Value = Round(sumDeposit, 0)
+        .Range(mod_config.CELL_SUM_WITHDRAW).Value = Round(sumWithdraw, 0)
+        .Range(mod_config.CELL_TOTAL_PNL).Value = Round(totalPnL, 0)
 
         .Range(mod_config.CELL_CASH & ":" & mod_config.CELL_CASH).NumberFormat = mod_config.MONEY_FMT
         .Range(mod_config.CELL_COIN & ":" & mod_config.CELL_COIN).NumberFormat = mod_config.MONEY_FMT
@@ -351,16 +367,25 @@ Public Sub Update_All_Position()
         .Range(mod_config.CELL_TOTAL_PNL & ":" & mod_config.CELL_TOTAL_PNL).NumberFormat = mod_config.MONEY_FMT
     End With
 
+    ' --- Update charts
+    ' Cash vs Coin (keep chart type)
+    UpdateCashCoinChart wsP
+    ' Portfolio breakdown (BTC / Alt.TOP / Alt.MID / Alt.LOW)
+    Update_Portfolio1_FromCategory
+    ' Portfolio2: per-coin holdings breakdown
+    UpdatePortfolio2_FromCoinValues wsP, coinVals
+
     ' --- Clear tail & format
     Dim lastRowPos As Long: lastRowPos = rowOut - 1
     If lastRowPos < 50 Then wsP.Range(wsP.Rows(lastRowPos + 1), wsP.Rows(50)).ClearContents
 
     SafeFormat wsP, portCols, rowOut - 1, hdrP, OUT_START
-    MsgBox "Position updated (dashboard totals + Deposit/Withdraw + Total P/L).", vbInformation
+    If Len(statusMsg) = 0 Then statusMsg = "Positions, dashboard, and charts updated."
 
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    If Len(statusMsg) > 0 Then MsgBox statusMsg, vbInformation
     Exit Sub
 
 Fail:
@@ -459,6 +484,432 @@ Fail:
     Application.ScreenUpdating = True
     MsgBox "Error: " & Err.Description, vbExclamation
 End Sub
+
+' =============================================================================
+' ======================== CHART UPDATE HELPERS ===============================
+' =============================================================================
+Private Sub UpdateCashCoinChart(wsP As Worksheet)
+    On Error GoTo Done
+    Dim co As ChartObject
+    Set co = Nothing
+
+    ' 1) Try by ChartObject.Name
+    On Error Resume Next
+    Set co = wsP.ChartObjects("Cash vs Coin")
+    On Error GoTo 0
+
+    ' 2) Try by Chart Title text (case-insensitive)
+    If co Is Nothing Then
+        Dim coIt As ChartObject
+        For Each coIt In wsP.ChartObjects
+            If Not coIt Is Nothing Then
+                If coIt.Chart.HasTitle Then
+                    If StrComp(coIt.Chart.ChartTitle.Text, "Cash vs Coin", vbTextCompare) = 0 Then
+                        Set co = coIt
+                        Exit For
+                    End If
+                End If
+            End If
+        Next coIt
+    End If
+
+    If co Is Nothing Then GoTo Done
+
+    Dim cashVal As Double, coinVal As Double
+    cashVal = 0#: coinVal = 0#
+    If IsNumeric(wsP.Range(mod_config.CELL_CASH).Value) Then cashVal = CDbl(wsP.Range(mod_config.CELL_CASH).Value)
+    If IsNumeric(wsP.Range(mod_config.CELL_COIN).Value) Then coinVal = CDbl(wsP.Range(mod_config.CELL_COIN).Value)
+
+    ' Pie charts do not support negative values. Guard and skip if invalid.
+    If cashVal < 0 Or coinVal < 0 Then GoTo Done
+
+    Dim ch As Chart
+    Set ch = co.Chart
+
+    Dim s As Series
+    If ch.SeriesCollection.Count = 0 Then
+        Set s = ch.SeriesCollection.NewSeries
+    Else
+        Set s = ch.SeriesCollection(1)
+    End If
+
+    ' Ensure only one series (first) remains
+    Dim i As Long
+    For i = ch.SeriesCollection.Count To 2 Step -1
+        ch.SeriesCollection(i).Delete
+    Next i
+
+    Dim vals As Variant, names As Variant
+    vals = Array(cashVal, coinVal)
+    names = Array("Cash", "Coin")
+    s.Values = vals
+    s.XValues = names
+    s.HasDataLabels = True
+    On Error Resume Next
+    s.DataLabels.ShowCategoryName = True
+    s.DataLabels.ShowPercentage = True
+    s.DataLabels.ShowValue = False
+    s.DataLabels.NumberFormat = "0%"
+    On Error GoTo 0
+
+Done:
+End Sub
+
+' Update the "Portfolio1" chart (pie) with portions by group: BTC, Alt.TOP, Alt.MID, Alt.LOW.
+' Group definitions are read from sheet mod_config.SHEET_CATEGORY with headers: Coin | Group (row 1).
+Public Sub Update_Portfolio1_FromCategory()
+    On Error GoTo Clean
+
+    Dim wsP As Worksheet, wsC As Worksheet
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+    If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
+    Set wsC = SheetByName(mod_config.SHEET_CATEGORY)
+    ' Fallbacks for common spellings
+    If wsC Is Nothing Then Set wsC = SheetByName("Category")
+    If wsC Is Nothing Then Set wsC = SheetByName("Categories")
+    If wsC Is Nothing Then Err.Raise 1004, , "Category sheet not found (tried '" & mod_config.SHEET_CATEGORY & "', 'Category', 'Categories')."
+
+    ' 1) Build per-coin available balance from Position (Open rows)
+    Dim hdrP As Long: hdrP = DetectPortfolioHeaderRow(wsP)
+    If hdrP = 0 Then Err.Raise 1004, , "Cannot find header row on '" & mod_config.SHEET_PORTFOLIO & "'."
+    Dim OUT_START As Long: OUT_START = hdrP + OUTPUT_OFFSET_ROWS
+    Dim portCols As Object: Set portCols = MapPortfolioHeaders(wsP, hdrP)
+    Dim lastPos As Long: lastPos = LastRowIn(wsP, portCols("Coin"), hdrP)
+
+    Dim holdDict As Object: Set holdDict = CreateObject("Scripting.Dictionary")
+    holdDict.CompareMode = vbTextCompare
+
+    Dim r As Long, posTxt As String, coin As String
+    Dim availBal As Double, qty As Double, mkt As Double
+
+    For r = OUT_START To lastPos
+        posTxt = CStr(wsP.Cells(r, portCols("Position")).Value)
+        If LCase$(Trim$(posTxt)) = "open" Then
+            coin = Trim$(CStr(wsP.Cells(r, portCols("Coin")).Value))
+            If Len(coin) > 0 Then
+                ' Prefer Available Balance if exists; else compute qty*price
+                availBal = 0#
+                If portCols("available balance") > 0 Then
+                    If IsNumeric(wsP.Cells(r, portCols("available balance")).Value) Then
+                        availBal = CDbl(wsP.Cells(r, portCols("available balance")).Value)
+                    End If
+                End If
+                If availBal = 0# Then
+                    qty = 0#: mkt = 0#
+                    If portCols("available qty") > 0 And IsNumeric(wsP.Cells(r, portCols("available qty")).Value) Then _
+                        qty = CDbl(wsP.Cells(r, portCols("available qty")).Value)
+                    If portCols("market price") > 0 And IsNumeric(wsP.Cells(r, portCols("market price")).Value) Then _
+                        mkt = CDbl(wsP.Cells(r, portCols("market price")).Value)
+                    availBal = qty * mkt
+                End If
+                If availBal > 0 Then
+                    If holdDict.Exists(coin) Then
+                        holdDict(coin) = holdDict(coin) + availBal
+                    Else
+                        holdDict(coin) = availBal
+                    End If
+                End If
+            End If
+        End If
+    Next r
+
+    ' 2) Read coin -> group mapping from Category sheet
+    Dim coinToGroup As Object
+    Set coinToGroup = BuildCoinToGroupFromCategorySheet(wsC)
+
+    ' 3) Aggregate into the four groups
+    Dim gVals As Object: Set gVals = CreateObject("Scripting.Dictionary")
+    gVals.CompareMode = vbTextCompare
+    gVals("BTC") = 0#: gVals("Alt.TOP") = 0#: gVals("Alt.MID") = 0#: gVals("Alt.LOW") = 0#
+
+    Dim k As Variant, grp As String, v As Double
+    For Each k In holdDict.Keys
+        v = CDbl(holdDict(k))
+        If UCase$(CStr(k)) = "BTC" Then
+            grp = "BTC"
+        ElseIf coinToGroup.Exists(CStr(k)) Then
+            grp = CStr(coinToGroup(k))
+        Else
+            grp = "Alt.LOW" ' default bucket for unmapped alts
+        End If
+        If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + v
+    Next k
+
+    ' 4) Update chart "Portfolio1" on Position sheet or chart sheet
+    Dim ok As Boolean
+    ok = UpdatePortfolio1Chart(wsP, gVals)
+    ' Silent on success/failure to avoid extra popups; top-level macro will report
+Clean:
+    End Sub
+
+Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boolean
+    On Error GoTo Done
+    Dim co As ChartObject, coIt As ChartObject
+    Set co = Nothing
+    On Error Resume Next
+    Set co = wsP.ChartObjects(mod_config.CHART_PORTFOLIO1)
+    On Error GoTo 0
+    If co Is Nothing Then
+        For Each coIt In wsP.ChartObjects
+            If Not coIt Is Nothing Then
+                If coIt.Chart.HasTitle Then
+                    If StrComp(coIt.Chart.ChartTitle.Text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                        Set co = coIt
+                        Exit For
+                    End If
+                End If
+            End If
+        Next coIt
+    End If
+    If co Is Nothing Then
+        ' Also search chart sheets by name or title
+        Dim chs As Chart
+        For Each chs In ThisWorkbook.Charts
+            If StrComp(chs.Name, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
+                Exit Function
+            End If
+            If chs.HasTitle Then
+                If StrComp(chs.ChartTitle.Text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                    UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
+                    Exit Function
+                End If
+            End If
+        Next chs
+        ' Not found anywhere -> create an embedded pie chart on Position
+        Set co = CreatePortfolio1Chart(wsP)
+        If co Is Nothing Then GoTo Done
+    End If
+
+    UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(co.Chart, gVals)
+
+Done:
+End Function
+
+Private Function ApplyPortfolioSeriesToChart(ByVal ch As Chart, ByVal gVals As Object) As Boolean
+    On Error GoTo Fail
+    Dim s As Series
+    If ch.SeriesCollection.Count = 0 Then
+        Set s = ch.SeriesCollection.NewSeries
+    Else
+        Set s = ch.SeriesCollection(1)
+    End If
+    Dim i As Long
+    For i = ch.SeriesCollection.Count To 2 Step -1
+        ch.SeriesCollection(i).Delete
+    Next i
+
+    Dim names As Variant, vals As Variant
+    names = Array("BTC", "Alt.TOP", "Alt.MID", "Alt.LOW")
+    vals = Array(CDbl(NzD(gVals("BTC"))), CDbl(NzD(gVals("Alt.TOP"))), CDbl(NzD(gVals("Alt.MID"))), CDbl(NzD(gVals("Alt.LOW"))))
+
+    ' If all zeros, do not update (avoid pie issues)
+    If (vals(0) + vals(1) + vals(2) + vals(3)) <= 0 Then GoTo Fail
+
+    s.XValues = names
+    s.Values = vals
+    s.HasDataLabels = True
+    On Error Resume Next
+    s.DataLabels.ShowCategoryName = True
+    s.DataLabels.ShowPercentage = True
+    s.DataLabels.ShowValue = False
+    s.DataLabels.NumberFormat = "0%"
+    On Error GoTo 0
+    ApplyPortfolioSeriesToChart = True
+    Exit Function
+Fail:
+    ApplyPortfolioSeriesToChart = False
+End Function
+
+Private Function BuildCoinToGroupFromCategorySheet(wsC As Worksheet) As Object
+    ' Supports two layouts:
+    ' A) Two-column mapping with headers in row 1: Coin | Group (or Category/Catagory)
+    ' B) Multi-column where row 1 cells are group names (BTC, Alt.TOP, Alt.MID, Alt.LOW)
+    '    and each column lists coins under that group starting row 2.
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary"): d.CompareMode = vbTextCompare
+
+    Dim lastCol As Long: lastCol = wsC.Cells(1, wsC.Columns.Count).End(xlToLeft).Column
+    If lastCol < 1 Then Set BuildCoinToGroupFromCategorySheet = d: Exit Function
+
+    Dim coinCol As Long, groupCol As Long, c As Long
+    coinCol = 0: groupCol = 0
+    ' First, try detect two-column layout
+    For c = 1 To lastCol
+        Dim h As String: h = NormalizeHeader(CStr(wsC.Cells(1, c).Value))
+        If h = "coin" Or h = "symbol" Or h = "asset" Then coinCol = c
+        If h = "group" Or h = "category" Or h = "catagory" Then groupCol = c
+    Next c
+
+    Dim r As Long
+    If coinCol > 0 And groupCol > 0 Then
+        Dim lastRow As Long: lastRow = wsC.Cells(wsC.Rows.Count, coinCol).End(xlUp).Row
+        For r = 2 To lastRow
+            Dim cc As String, gg As String
+            cc = Trim$(CStr(wsC.Cells(r, coinCol).Value))
+            gg = Trim$(CStr(wsC.Cells(r, groupCol).Value))
+            If Len(cc) > 0 And Len(gg) > 0 Then d(cc) = gg
+        Next r
+        Set BuildCoinToGroupFromCategorySheet = d
+        Exit Function
+    End If
+
+    ' Otherwise, treat each header in row 1 as a group, coins listed below
+    For c = 1 To lastCol
+        Dim grp As String: grp = Trim$(CStr(wsC.Cells(1, c).Value))
+        If Len(grp) > 0 Then
+            Dim lastR As Long: lastR = wsC.Cells(wsC.Rows.Count, c).End(xlUp).Row
+            For r = 2 To lastR
+                Dim coin As String: coin = Trim$(CStr(wsC.Cells(r, c).Value))
+                If Len(coin) > 0 Then d(coin) = grp
+            Next r
+        End If
+    Next c
+
+    Set BuildCoinToGroupFromCategorySheet = d
+End Function
+
+Private Function CreatePortfolio1Chart(wsP As Worksheet) As ChartObject
+    On Error GoTo Fail
+    Dim co As ChartObject
+    ' Pick a default placement near the dashboard area
+    Set co = wsP.ChartObjects.Add(Left:=300, Top:=20, Width:=360, Height:=220)
+    co.Name = mod_config.CHART_PORTFOLIO1
+    With co.Chart
+        .ChartType = xlPie
+        .HasTitle = True
+        .ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+        ' Initialize with placeholders so chart renders
+        Dim vals As Variant, names As Variant
+        names = Array("BTC", "Alt.TOP", "Alt.MID", "Alt.LOW")
+        vals = Array(1, 1, 1, 1)
+        Dim s As Series
+        If .SeriesCollection.Count = 0 Then
+            Set s = .SeriesCollection.NewSeries
+        Else
+            Set s = .SeriesCollection(1)
+        End If
+        s.XValues = names
+        s.Values = vals
+        s.HasDataLabels = True
+        On Error Resume Next
+        s.DataLabels.ShowCategoryName = True
+        s.DataLabels.ShowPercentage = True
+        s.DataLabels.ShowValue = False
+        s.DataLabels.NumberFormat = "0%"
+        On Error GoTo 0
+    End With
+    Set CreatePortfolio1Chart = co
+    Exit Function
+Fail:
+    Set CreatePortfolio1Chart = Nothing
+End Function
+
+Private Sub UpdatePortfolio2_FromCoinValues(wsP As Worksheet, coinVals As Object)
+    On Error Resume Next
+    Dim co As ChartObject
+    Set co = Nothing
+    Set co = wsP.ChartObjects(mod_config.CHART_PORTFOLIO2)
+    On Error GoTo 0
+    If co Is Nothing Then
+        ' Try chart sheets
+        Dim chs As Chart
+        For Each chs In ThisWorkbook.Charts
+            If StrComp(chs.Name, mod_config.CHART_PORTFOLIO2, vbTextCompare) = 0 Then
+                ApplyPerCoinSeriesToChart chs, coinVals
+                Exit Sub
+            End If
+            If chs.HasTitle Then
+                If StrComp(chs.ChartTitle.Text, mod_config.CHART_PORTFOLIO2, vbTextCompare) = 0 Then
+                    ApplyPerCoinSeriesToChart chs, coinVals
+                    Exit Sub
+                End If
+            End If
+        Next chs
+        ' Create if not found on Position sheet
+        Set co = CreatePortfolio2Chart(wsP)
+        If co Is Nothing Then Exit Sub
+    End If
+    ApplyPerCoinSeriesToChart co.Chart, coinVals
+End Sub
+
+Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Object)
+    On Error GoTo Fail
+    If coinVals Is Nothing Then Exit Sub
+    If coinVals.Count = 0 Then Exit Sub
+
+    Dim s As Series
+    If ch.SeriesCollection.Count = 0 Then
+        Set s = ch.SeriesCollection.NewSeries
+    Else
+        Set s = ch.SeriesCollection(1)
+    End If
+    Dim i As Long
+    For i = ch.SeriesCollection.Count To 2 Step -1
+        ch.SeriesCollection(i).Delete
+    Next i
+
+    ' Build arrays from dictionary
+    Dim n As Long: n = coinVals.Count
+    Dim names() As Variant, vals() As Double
+    ReDim names(1 To n)
+    ReDim vals(1 To n)
+    Dim k As Variant, idx As Long: idx = 1
+    For Each k In coinVals.Keys
+        names(idx) = CStr(k)
+        vals(idx) = CDbl(coinVals(k))
+        idx = idx + 1
+    Next k
+
+    ' If totals are zero, skip
+    Dim sumV As Double
+    For i = 1 To n
+        sumV = sumV + vals(i)
+    Next i
+    If sumV <= 0 Then Exit Sub
+
+    s.XValues = names
+    s.Values = vals
+    s.HasDataLabels = True
+    On Error Resume Next
+    s.DataLabels.ShowCategoryName = True
+    s.DataLabels.ShowPercentage = True
+    s.DataLabels.ShowValue = False
+    s.DataLabels.NumberFormat = "0%"
+    On Error GoTo 0
+    Exit Sub
+Fail:
+End Sub
+
+Private Function CreatePortfolio2Chart(wsP As Worksheet) As ChartObject
+    On Error GoTo Fail
+    Dim co As ChartObject
+    Set co = wsP.ChartObjects.Add(Left:=680, Top:=20, Width:=360, Height:=220)
+    co.Name = mod_config.CHART_PORTFOLIO2
+    With co.Chart
+        .ChartType = xlPie
+        .HasTitle = True
+        .ChartTitle.Text = mod_config.CHART_PORTFOLIO2
+        Dim s As Series
+        If .SeriesCollection.Count = 0 Then
+            Set s = .SeriesCollection.NewSeries
+        Else
+            Set s = .SeriesCollection(1)
+        End If
+        s.XValues = Array("Coin A", "Coin B")
+        s.Values = Array(1, 1)
+        s.HasDataLabels = True
+        On Error Resume Next
+        s.DataLabels.ShowCategoryName = True
+        s.DataLabels.ShowPercentage = True
+        s.DataLabels.ShowValue = False
+        s.DataLabels.NumberFormat = "0%"
+        On Error GoTo 0
+    End With
+    Set CreatePortfolio2Chart = co
+    Exit Function
+Fail:
+    Set CreatePortfolio2Chart = Nothing
+End Function
 
 
 ' =========================== SESSION HELPERS =================================

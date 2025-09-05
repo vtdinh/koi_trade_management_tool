@@ -8,6 +8,11 @@ Option Explicit
 Public Const SHEET_PORTFOLIO As String = "Position"
 Public Const SHEET_ORDERS    As String = "Order_History"
 Public Const SHEET_SNAPSHOT  As String = "Daily_Snapshot"
+Public Const SHEET_CATEGORY  As String = "Catagory"   ' mapping Coin -> Group
+
+' Charts
+Public Const CHART_PORTFOLIO1 As String = "Portfolio1"
+Public Const CHART_PORTFOLIO2 As String = "Portfolio2"
 
 ' Key cells on Position sheet
 Public Const CELL_CUTOFF       As String = "B3"  ' cutoff datetime (UTC+7)
@@ -107,4 +112,3 @@ Public Function NormalizeHeader(ByVal s As String) As String
     t = Replace$(t, "-", "")
     NormalizeHeader = t
 End Function
-
