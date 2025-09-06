@@ -1,6 +1,20 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
 
+' ===================== DASHBOARD: NAV Drawdown Text =====================
+' Positioning and style config for the Max Drawdown textbox on NAV chart
+' NAV_MDD_ANCHOR options:
+'   - "UnderTitle"   : centered just below the chart title (default)
+'   - "PlotTopRight" : inside plot area, top-right
+'   - "PlotTopLeft"  : inside plot area, top-left
+Public Const NAV_MDD_ANCHOR   As String = "UnderTitle"
+Public Const NAV_MDD_OFFSET_X As Single = 0       ' pixels relative to anchor
+Public Const NAV_MDD_OFFSET_Y As Single = 0       ' pixels relative to anchor
+Public Const NAV_MDD_WIDTH    As Single = 160
+Public Const NAV_MDD_HEIGHT   As Single = 18
+' NAV_MDD_ALIGN: "Center" | "Left" | "Right"
+Public Const NAV_MDD_ALIGN    As String = "Center"
+
 ' ===================== GLOBAL CONFIG =====================
 ' Centralized configuration and helper lists for all modules
 '
@@ -8,7 +22,8 @@ Option Explicit
 Public Const SHEET_PORTFOLIO As String = "Position"
 Public Const SHEET_ORDERS    As String = "Order_History"
 Public Const SHEET_SNAPSHOT  As String = "Daily_Snapshot"
-Public Const SHEET_CATEGORY  As String = "Catagory"   ' mapping Coin -> Group
+Public Const SHEET_CATEGORY  As String = "Category"   ' mapping Coin -> Group
+Public Const SHEET_DASHBOARD As String = "Dashboard"
 
 ' Charts
 Public Const CHART_PORTFOLIO1 As String = "Portfolio1"
@@ -62,3 +77,4 @@ End Function
 
 ' Stablecoins treated as unit price = 1
  ' (Removed unused helper lists and NormalizeHeader to keep module minimal)
+
