@@ -1,7 +1,7 @@
 Attribute VB_Name = "mod_dashboard"
 Option Explicit
 '
-' Last Modified (UTC): 2025-09-06T10:15:31Z
+' Last Modified (UTC): 2025-09-06T10:53:51Z
 
 Public Sub Update_Dashboard()
     On Error GoTo Fail
@@ -213,6 +213,153 @@ Public Sub Update_Dashboard()
         .Crosses = xlAxisCrossesMinimum
     End With
     On Error GoTo 0
+
+    ' Build/Apply Portfolio_Group chart (stacked column of category amounts; no labels)
+    ' Assumed Daily_Snapshot layout:
+    '   Col A = Date, B = Cash, C = Coin (total), D = NAV, E = Deposit, F = Withdraw, G = PnL,
+    '   Col H.. = one column per Category (amount in same units as Coin, e.g., USD value of holdings)
+    Dim lastCol As Long
+    lastCol = wsSnap.Cells(1, wsSnap.Columns.Count).End(xlToLeft).Column
+    If lastCol > 7 Then
+        Dim catCount As Long: catCount = 0
+        Dim catNames() As String, catCols() As Long
+        Dim iCat As Long, iCol As Long
+        Dim hdr As String
+        ' Build list of category columns, skipping any header named "Holdings"/"Holding"
+        For iCol = 8 To lastCol
+            hdr = Trim$(CStr(wsSnap.Cells(1, iCol).Value))
+            If LCase$(hdr) <> "holdings" And LCase$(hdr) <> "holding" Then
+                catCount = catCount + 1
+                ReDim Preserve catNames(1 To catCount)
+                ReDim Preserve catCols(1 To catCount)
+                If hdr = vbNullString Then
+                    catNames(catCount) = "Cat" & CStr(catCount)
+                Else
+                    catNames(catCount) = hdr
+                End If
+                catCols(catCount) = iCol
+            End If
+        Next iCol
+
+        If count > 0 And catCount > 0 Then
+            ' Prepare per-category arrays of values and percents sized to filtered date count
+            Dim catVals As Object: Set catVals = CreateObject("Scripting.Dictionary")
+            Dim catPct As Object:  Set catPct  = CreateObject("Scripting.Dictionary")
+            catVals.CompareMode = vbTextCompare: catPct.CompareMode = vbTextCompare
+            Dim tmp() As Double, tmp2() As Double
+            For iCat = 1 To catCount
+                ReDim tmp(1 To count)
+                ReDim tmp2(1 To count)
+                catVals(CStr(iCat)) = tmp
+                catPct(CStr(iCat)) = tmp2
+            Next iCat
+
+            ' Second pass to fill arrays aligned with datesArr
+            Dim idx As Long: idx = 0
+            For r = 2 To lastR
+                If IsDate(wsSnap.Cells(r, 1).Value) Then
+                    dt = DateValue(wsSnap.Cells(r, 1).Value)
+                    If dt >= dStart And dt <= dEnd Then
+                        idx = idx + 1
+                        Dim coinTotal As Double
+                        If IsNumeric(wsSnap.Cells(r, 3).Value) Then coinTotal = CDbl(wsSnap.Cells(r, 3).Value) Else coinTotal = 0#
+                        For iCat = 1 To catCount
+                            tmp = catVals(CStr(iCat))
+                            tmp2 = catPct(CStr(iCat))
+                            Dim vAmt As Double
+                            If IsNumeric(wsSnap.Cells(r, catCols(iCat)).Value) Then vAmt = CDbl(wsSnap.Cells(r, catCols(iCat)).Value) Else vAmt = 0#
+                            tmp(idx) = vAmt
+                            If Abs(coinTotal) > mod_config.EPS_CLOSE Then
+                                tmp2(idx) = vAmt / coinTotal
+                            Else
+                                tmp2(idx) = 0#
+                            End If
+                            catVals(CStr(iCat)) = tmp
+                            catPct(CStr(iCat)) = tmp2
+                        Next iCat
+                    End If
+                End If
+            Next r
+
+            ' Create/update stacked column chart
+            Set co = GetOrCreateChart(wsDash, "Portfolio_Group")
+            Set ch = co.Chart
+            ch.ChartType = xlColumnStacked
+            ch.HasTitle = True
+            ch.ChartTitle.Text = "Portfolio_Group"
+            ch.HasLegend = True
+            ' Remove any pre-existing series named like "Holdings"
+            On Error Resume Next
+            For iCol = ch.SeriesCollection.Count To 1 Step -1
+                If InStr(1, ch.SeriesCollection(iCol).Name, "holding", vbTextCompare) > 0 Then
+                    ch.SeriesCollection(iCol).Delete
+                End If
+            Next iCol
+            On Error GoTo 0
+            ' Ensure enough series
+            Dim sc As Long: sc = ch.SeriesCollection.Count
+            If sc < catCount Then
+                For iCat = sc + 1 To catCount
+                    ch.SeriesCollection.NewSeries
+                Next iCat
+            End If
+            ' Remove extra series
+            On Error Resume Next
+            Do While ch.SeriesCollection.Count > catCount
+                ch.SeriesCollection(catCount + 1).Delete
+            Loop
+            On Error GoTo 0
+
+            ' Assign data per category
+            Dim sCat As Series
+            For iCat = 1 To catCount
+                Set sCat = ch.SeriesCollection(iCat)
+                sCat.Name = catNames(iCat)
+                sCat.Values = catVals(CStr(iCat))
+                sCat.XValues = datesArr
+                ' Data labels: show amount and percent
+                ' No data labels (remove amount/percent)
+                sCat.HasDataLabels = False
+            Next iCat
+
+            ' Remove legend entry named "Holdings" (case-insensitive), if present
+            On Error Resume Next
+            If ch.HasLegend Then
+                Dim iLE As Long
+                For iLE = ch.Legend.LegendEntries.Count To 1 Step -1
+                    Dim cap As String
+                    cap = ch.Legend.LegendEntries(iLE).Caption
+                    If InStr(1, cap, "holding", vbTextCompare) > 0 Then
+                        ch.Legend.LegendEntries(iLE).Delete
+                    End If
+                Next iLE
+            End If
+            On Error GoTo 0
+
+            On Error Resume Next
+            ch.Axes(xlCategory).TickLabels.NumberFormat = mod_config.SNAPSHOT_DATE_FMT
+            ch.Axes(xlValue).TickLabels.NumberFormat = mod_config.MONEY_FMT
+            On Error GoTo 0
+        Else
+            ' No rows in range: clear chart
+            Set co = GetOrCreateChart(wsDash, "Portfolio_Group")
+            Set ch = co.Chart
+            On Error Resume Next
+            Do While ch.SeriesCollection.Count > 0
+                ch.SeriesCollection(1).Delete
+            Loop
+            On Error GoTo 0
+            ch.ChartType = xlColumnStacked
+            ch.HasTitle = True
+            ch.ChartTitle.Text = "Portfolio_Group"
+        End If
+    Else
+        ' No category columns present in Daily_Snapshot
+        On Error Resume Next
+        Set co = GetOrCreateChart(wsDash, "Portfolio_Group")
+        co.Chart.ChartTitle.Text = "Portfolio_Group (no categories)"
+        On Error GoTo 0
+    End If
 
     Exit Sub
 Fail:
