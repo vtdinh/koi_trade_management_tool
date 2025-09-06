@@ -19,7 +19,7 @@ Public Sub Update_Dashboard()
 
     ' Build NAV series from Daily_Snapshot (Date in col A, NAV in col D)
     Dim lastR As Long: lastR = wsSnap.Cells(wsSnap.Rows.Count, 1).End(xlUp).Row
-    Dim datesArr() As Variant, navArr() As Double, pnlArr() As Double
+    Dim datesArr() As Variant, navArr() As Double, pnlArr() As Double, depArr() As Double, wdrArr() As Double
     Dim count As Long: count = 0
 
     Dim r As Long, dt As Date
@@ -31,6 +31,8 @@ Public Sub Update_Dashboard()
                 ReDim Preserve datesArr(1 To count)
                 ReDim Preserve navArr(1 To count)
                 ReDim Preserve pnlArr(1 To count)
+                ReDim Preserve depArr(1 To count)
+                ReDim Preserve wdrArr(1 To count)
                 datesArr(count) = dt
                 If IsNumeric(wsSnap.Cells(r, 4).Value) Then
                     navArr(count) = CDbl(wsSnap.Cells(r, 4).Value)
@@ -41,6 +43,16 @@ Public Sub Update_Dashboard()
                     pnlArr(count) = CDbl(wsSnap.Cells(r, 7).Value)
                 Else
                     pnlArr(count) = 0#
+                End If
+                If IsNumeric(wsSnap.Cells(r, 5).Value) Then
+                    depArr(count) = CDbl(wsSnap.Cells(r, 5).Value)
+                Else
+                    depArr(count) = 0#
+                End If
+                If IsNumeric(wsSnap.Cells(r, 6).Value) Then
+                    wdrArr(count) = CDbl(wsSnap.Cells(r, 6).Value)
+                Else
+                    wdrArr(count) = 0#
                 End If
             End If
         End If
@@ -77,10 +89,57 @@ Public Sub Update_Dashboard()
     ch.Axes(xlValue).TickLabels.NumberFormat = mod_config.MONEY_FMT
     On Error GoTo 0
 
-    ' Compute drawdowns and annotate
+    ' Compute drawdowns and annotate on NAV chart (before switching charts)
     Dim mddPct As Double: mddPct = ComputeMaxDrawdownPct(navArr)
     Dim curDDPct As Double: curDDPct = ComputeCurrentDrawdownPct(navArr)
     AnnotateDrawdown ch, mddPct, curDDPct
+
+    ' Build/Apply combined Deposit & Withdraw chart
+    Set co = GetOrCreateChart(wsDash, "Deposit")
+    Set ch = co.Chart
+    Dim sDep As Series, sWdr As Series
+    If ch.SeriesCollection.Count = 0 Then
+        Set sDep = ch.SeriesCollection.NewSeries
+        Set sWdr = ch.SeriesCollection.NewSeries
+    ElseIf ch.SeriesCollection.Count = 1 Then
+        Set sDep = ch.SeriesCollection(1)
+        Set sWdr = ch.SeriesCollection.NewSeries
+    Else
+        Set sDep = ch.SeriesCollection(1)
+        Set sWdr = ch.SeriesCollection(2)
+    End If
+    If count > 0 Then
+        sDep.Name = "Deposit"
+        sDep.Values = depArr
+        sDep.XValues = datesArr
+        sWdr.Name = "Withdraw"
+        sWdr.Values = wdrArr
+        sWdr.XValues = datesArr
+    Else
+        On Error Resume Next
+        Do While ch.SeriesCollection.Count > 0
+            ch.SeriesCollection(1).Delete
+        Loop
+        On Error GoTo 0
+    End If
+    ch.ChartType = xlLine
+    ch.HasTitle = True
+    ch.ChartTitle.Text = "Deposit & Withdraw"
+    ' Ensure no drawdown annotation appears on this chart
+    On Error Resume Next
+    ch.Shapes("MDD_NAV").Delete
+    On Error GoTo 0
+    ch.HasLegend = True
+    On Error Resume Next
+    ch.Axes(xlCategory).CategoryType = xlTimeScale
+    ch.Axes(xlCategory).TickLabels.NumberFormat = mod_config.SNAPSHOT_DATE_FMT
+    ch.Axes(xlValue).TickLabels.NumberFormat = mod_config.MONEY_FMT
+    With ch.Axes(xlValue)
+        .Crosses = xlAxisCrossesMinimum
+    End With
+    ' Remove old standalone Withdraw chart if it exists
+    wsDash.ChartObjects("Withdraw").Delete
+    On Error GoTo 0
 
     ' Build/Apply PnL chart (Total profit)
     Set co = GetOrCreateChart(wsDash, "PnL")
@@ -165,7 +224,14 @@ Private Function ComputeCurrentDrawdownPct(vals() As Double) As Double
         If vals(i) > peak Then peak = vals(i)
     Next i
     If peak > 0 Then
-        ComputeCurrentDrawdownPct = (peak - vals(UBound(vals))) / peak
+        Dim lastVal As Double
+        lastVal = vals(UBound(vals))
+        ' If last value is at all-time high (within tolerance), drawdown is zero
+        If lastVal >= peak - mod_config.EPS_CLOSE Then
+            ComputeCurrentDrawdownPct = 0#
+        Else
+            ComputeCurrentDrawdownPct = (peak - lastVal) / peak
+        End If
     Else
         ComputeCurrentDrawdownPct = 0#
     End If
@@ -175,6 +241,15 @@ Done:
 End Function
 
 Private Sub AnnotateDrawdown(ch As Chart, ByVal mddPct As Double, ByVal curDDPct As Double)
+    ' Annotate all charts except Deposit/Withdraw/PnL
+    On Error Resume Next
+    Dim co As Object
+    Set co = ch.Parent
+    If Not co Is Nothing Then
+        Dim cname As String: cname = LCase$(co.Name)
+        If InStr(cname, "deposit") > 0 Or InStr(cname, "withdraw") > 0 Or InStr(cname, "pnl") > 0 Then Exit Sub
+    End If
+    On Error GoTo 0
     On Error Resume Next
     Dim shp As Shape
     ' Remove old annotation if any
