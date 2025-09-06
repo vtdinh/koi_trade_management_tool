@@ -1,5 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
+' Last Modified (UTC): 2025-09-06T09:57:05Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart

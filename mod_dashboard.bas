@@ -1,5 +1,7 @@
 Attribute VB_Name = "mod_dashboard"
 Option Explicit
+'
+' Last Modified (UTC): 2025-09-06T10:15:31Z
 
 Public Sub Update_Dashboard()
     On Error GoTo Fail
@@ -19,7 +21,7 @@ Public Sub Update_Dashboard()
 
     ' Build NAV series from Daily_Snapshot (Date in col A, NAV in col D)
     Dim lastR As Long: lastR = wsSnap.Cells(wsSnap.Rows.Count, 1).End(xlUp).Row
-    Dim datesArr() As Variant, navArr() As Double, pnlArr() As Double, depArr() As Double, wdrArr() As Double
+    Dim datesArr() As Variant, navArr() As Double, pnlArr() As Double, depArr() As Double, wdrArr() As Double, ratioArr() As Double
     Dim count As Long: count = 0
 
     Dim r As Long, dt As Date
@@ -33,6 +35,7 @@ Public Sub Update_Dashboard()
                 ReDim Preserve pnlArr(1 To count)
                 ReDim Preserve depArr(1 To count)
                 ReDim Preserve wdrArr(1 To count)
+                ReDim Preserve ratioArr(1 To count)
                 datesArr(count) = dt
                 If IsNumeric(wsSnap.Cells(r, 4).Value) Then
                     navArr(count) = CDbl(wsSnap.Cells(r, 4).Value)
@@ -53,6 +56,14 @@ Public Sub Update_Dashboard()
                     wdrArr(count) = CDbl(wsSnap.Cells(r, 6).Value)
                 Else
                     wdrArr(count) = 0#
+                End If
+                ' Cash vs NAV percentage from snapshot columns: Cash (col 2) / NAV (col 4)
+                Dim cashVal As Double
+                If IsNumeric(wsSnap.Cells(r, 2).Value) Then cashVal = CDbl(wsSnap.Cells(r, 2).Value) Else cashVal = 0#
+                If Abs(navArr(count)) > mod_config.EPS_CLOSE Then
+                    ratioArr(count) = cashVal / navArr(count) ' fraction, format axis as percent
+                Else
+                    ratioArr(count) = 0#
                 End If
             End If
         End If
@@ -165,6 +176,39 @@ Public Sub Update_Dashboard()
     ch.Axes(xlCategory).TickLabels.NumberFormat = mod_config.SNAPSHOT_DATE_FMT
     ch.Axes(xlValue).TickLabels.NumberFormat = mod_config.MONEY_FMT
     ' Always place X axis at bottom
+    With ch.Axes(xlValue)
+        .Crosses = xlAxisCrossesMinimum
+    End With
+    On Error GoTo 0
+
+    ' Build/Apply Cash vs NAV chart (percent = Cash/NAV)
+    ' Remove legacy chart if previously named "Cash vs Coin"
+    On Error Resume Next: wsDash.ChartObjects("Cash vs Coin").Delete: On Error GoTo 0
+    Set co = GetOrCreateChart(wsDash, "Cash vs NAV")
+    Set ch = co.Chart
+    If ch.SeriesCollection.Count = 0 Then
+        Set s = ch.SeriesCollection.NewSeries
+    Else
+        Set s = ch.SeriesCollection(1)
+    End If
+    If count > 0 Then
+        s.Name = "Cash/NAV"
+        s.Values = ratioArr
+        s.XValues = datesArr
+    Else
+        On Error Resume Next
+        ch.SeriesCollection(1).Delete
+        On Error GoTo 0
+    End If
+    ch.ChartType = xlLine
+    ch.HasTitle = True
+    ch.ChartTitle.Text = "Cash vs NAV"
+    ch.HasLegend = False
+    On Error Resume Next
+    ch.Axes(xlCategory).CategoryType = xlTimeScale
+    ch.Axes(xlCategory).TickLabels.NumberFormat = mod_config.SNAPSHOT_DATE_FMT
+    ' Show percentage (e.g., 10%, 21%)
+    ch.Axes(xlValue).TickLabels.NumberFormat = "0%"
     With ch.Axes(xlValue)
         .Crosses = xlAxisCrossesMinimum
     End With
