@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-07T06:04:07Z
+' Last Modified (UTC): 2025-09-07T08:53:58Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -662,6 +662,21 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
                         Exit For
                     End If
                 End If
+                ' Legacy names support: rename to new canonical name
+                If co Is Nothing Then
+                    If StrComp(coIt.Name, "Portfolio1", vbTextCompare) = 0 _
+                       Or StrComp(coIt.Name, "Portfolio 1", vbTextCompare) = 0 _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0) _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0) Then
+                        On Error Resume Next
+                        coIt.Name = mod_config.CHART_PORTFOLIO1
+                        coIt.Chart.HasTitle = True
+                        coIt.Chart.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                        On Error GoTo 0
+                        Set co = coIt
+                        Exit For
+                    End If
+                End If
             End If
         Next coIt
     End If
@@ -675,6 +690,26 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
             End If
             If chs.HasTitle Then
                 If StrComp(chs.ChartTitle.Text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                    UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
+                    Exit Function
+                End If
+            End If
+            ' Legacy chart sheet names/titles -> rename then use
+            If StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Then
+                On Error Resume Next
+                chs.Name = mod_config.CHART_PORTFOLIO1
+                chs.HasTitle = True
+                chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                On Error GoTo 0
+                UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
+                Exit Function
+            End If
+            If chs.HasTitle Then
+                If StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then
+                    On Error Resume Next
+                    chs.HasTitle = True
+                    chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                    On Error GoTo 0
                     UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
                     Exit Function
                 End If
@@ -832,10 +867,40 @@ Private Sub UpdatePortfolio2_FromCoinValues(wsP As Worksheet, coinVals As Object
                     Exit Sub
                 End If
             End If
+            ' Legacy names for Portfolio2 -> rename then use
+            If StrComp(chs.Name, "Portfolio2", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 2", vbTextCompare) = 0 Then
+                On Error Resume Next
+                chs.Name = mod_config.CHART_PORTFOLIO2
+                chs.HasTitle = True
+                chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
+                On Error GoTo 0
+                ApplyPerCoinSeriesToChart chs, coinVals
+                Exit Sub
+            End If
+            If chs.HasTitle Then
+                If StrComp(chs.ChartTitle.Text, "Portfolio2", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 2", vbTextCompare) = 0 Then
+                    On Error Resume Next
+                    chs.HasTitle = True
+                    chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
+                    On Error GoTo 0
+                    ApplyPerCoinSeriesToChart chs, coinVals
+                    Exit Sub
+                End If
+            End If
         Next chs
         ' Create if not found on Position sheet
         Set co = CreatePortfolio2Chart(wsP)
         If co Is Nothing Then Exit Sub
+    End If
+    ' If found on Position sheet with legacy name, rename it now
+    If Not co Is Nothing Then
+        If StrComp(co.Name, "Portfolio2", vbTextCompare) = 0 Or StrComp(co.Name, "Portfolio 2", vbTextCompare) = 0 Then
+            On Error Resume Next
+            co.Name = mod_config.CHART_PORTFOLIO2
+            co.Chart.HasTitle = True
+            co.Chart.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
+            On Error GoTo 0
+        End If
     End If
     ApplyPerCoinSeriesToChart co.Chart, coinVals
 End Sub
@@ -1188,9 +1253,11 @@ End Function
 Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByVal headerRow As Long, ByVal outStart As Long)
     If lastRow < outStart Then Exit Sub
     On Error Resume Next
-    ws.Range(ws.Cells(outStart, portCols("Buy Qty")), ws.Cells(lastRow, portCols("Buy Qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
-    ws.Range(ws.Cells(outStart, portCols("sell qty")), ws.Cells(lastRow, portCols("sell qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
-    ws.Range(ws.Cells(outStart, portCols("available qty")), ws.Cells(lastRow, portCols("available qty"))).NumberFormat = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
+    Dim qtyFmt As String: qtyFmt = GetOrderQtyNumberFormat()
+    If Len(qtyFmt) = 0 Then qtyFmt = "0." & String(mod_config.ROUND_QTY_DECIMALS, "0")
+    ws.Range(ws.Cells(outStart, portCols("Buy Qty")), ws.Cells(lastRow, portCols("Buy Qty"))).NumberFormat = qtyFmt
+    ws.Range(ws.Cells(outStart, portCols("sell qty")), ws.Cells(lastRow, portCols("sell qty"))).NumberFormat = qtyFmt
+    ws.Range(ws.Cells(outStart, portCols("available qty")), ws.Cells(lastRow, portCols("available qty"))).NumberFormat = qtyFmt
 
     ws.Range(ws.Cells(outStart, portCols("Cost")), ws.Cells(lastRow, portCols("Cost"))).NumberFormat = mod_config.MONEY_FMT
     ws.Range(ws.Cells(outStart, portCols("sell proceeds")), ws.Cells(lastRow, portCols("sell proceeds"))).NumberFormat = mod_config.MONEY_FMT
@@ -1212,6 +1279,33 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
     ws.Range(ws.Cells(headerRow, MinCol(portCols)), ws.Cells(lastRow, MaxCol(portCols))).EntireColumn.AutoFit
     On Error GoTo 0
 End Sub
+
+' Return the NumberFormat for the Qty column in Order_History
+Private Function GetOrderQtyNumberFormat() As String
+    On Error GoTo Done
+    Dim wsO As Worksheet: Set wsO = SheetByName(mod_config.SHEET_ORDERS)
+    If wsO Is Nothing Then GoTo Done
+    Dim hdrO As Long: hdrO = DetectOrderHeaderRow(wsO, mod_config.ORDERS_HEADER_ROW_DEFAULT)
+    If hdrO = 0 Then GoTo Done
+    Dim ordCols As Object: Set ordCols = MapOrderHeaders(wsO, hdrO)
+    If Not ordCols.Exists("Qty") Then GoTo Done
+    Dim c As Long: c = CLng(ordCols("Qty"))
+    If c <= 0 Then GoTo Done
+    ' Prefer the first data cell's NumberFormat below the header if available
+    Dim lastR As Long: lastR = wsO.Cells(wsO.Rows.Count, c).End(xlUp).Row
+    Dim r As Long
+    For r = hdrO + 1 To lastR
+        If IsNumeric(wsO.Cells(r, c).Value) Then
+            GetOrderQtyNumberFormat = wsO.Cells(r, c).NumberFormat
+            If Len(GetOrderQtyNumberFormat) > 0 Then Exit Function
+        End If
+    Next r
+    ' Fallback to column format
+    GetOrderQtyNumberFormat = wsO.Columns(c).NumberFormat
+    Exit Function
+Done:
+    GetOrderQtyNumberFormat = vbNullString
+End Function
 
 
 ' ========================== PRICE FETCH HELPERS ==============================

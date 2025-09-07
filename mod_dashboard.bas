@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_dashboard"
 Option Explicit
-' Last Modified (UTC): 2025-09-07T08:15:56Z
+' Last Modified (UTC): 2025-09-07T08:37:30Z
 
 Public Sub Update_Dashboard()
     On Error GoTo Fail
@@ -221,14 +221,14 @@ Public Sub Update_Dashboard()
     End With
     On Error GoTo 0
 
-    ' Build/Apply Portfolio_Catagory chart (stacked column of category amounts; no labels)
+    ' Build/Apply Portfolio_Category chart (stacked column of category amounts; no labels)
     ' Assumed Daily_Snapshot layout:
     '   Col A = Date, B = Cash, C = Coin (total), D = NAV, E = Deposit, F = Withdraw, G = PnL,
     '   Col H.. = one column per Category (amount in same units as Coin, e.g., USD value of holdings)
     Dim lastCol As Long
     lastCol = wsSnap.Cells(1, wsSnap.Columns.Count).End(xlToLeft).Column
     If lastCol > 7 Then
-        ' Prefer computing Portfolio_Catagory from Holdings + Catagory mapping if available
+        ' Prefer computing Portfolio_Category from Holdings + Catagory mapping if available
         Dim holdColPG As Long: holdColPG = 0
         Dim cPG As Long, hdrPG As String
         For cPG = 1 To lastCol
@@ -318,11 +318,11 @@ Public Sub Update_Dashboard()
             Next iPG
 
             ' Apply to chart
-            Set co = GetOrCreateChart(wsDash, "Portfolio_Catagory")
+            Set co = GetOrCreateChart(wsDash, "Portfolio_Category")
             Set ch = co.Chart
             ch.ChartType = xlColumnStacked
             ch.HasTitle = True
-            ch.ChartTitle.Text = "Portfolio_Catagory"
+            ch.ChartTitle.Text = "Portfolio_Category"
             ch.HasLegend = True
 
             ' Ensure series count equals groups
@@ -407,11 +407,11 @@ Public Sub Update_Dashboard()
             Next r
 
             ' Create/update stacked column chart
-            Set co = GetOrCreateChart(wsDash, "Portfolio_Catagory")
+            Set co = GetOrCreateChart(wsDash, "Portfolio_Category")
             Set ch = co.Chart
             ch.ChartType = xlColumnStacked
             ch.HasTitle = True
-            ch.ChartTitle.Text = "Portfolio_Catagory"
+            ch.ChartTitle.Text = "Portfolio_Category"
             ch.HasLegend = True
             ' Remove any pre-existing series named like "Holdings"
             On Error Resume Next
@@ -467,7 +467,7 @@ Public Sub Update_Dashboard()
             On Error GoTo 0
         Else
             ' No rows in range: clear chart
-            Set co = GetOrCreateChart(wsDash, "Portfolio_Catagory")
+            Set co = GetOrCreateChart(wsDash, "Portfolio_Category")
             Set ch = co.Chart
             On Error Resume Next
             Do While ch.SeriesCollection.Count > 0
@@ -476,14 +476,14 @@ Public Sub Update_Dashboard()
             On Error GoTo 0
             ch.ChartType = xlColumnStacked
             ch.HasTitle = True
-            ch.ChartTitle.Text = "Portfolio_Catagory"
+            ch.ChartTitle.Text = "Portfolio_Category"
         End If
         End If
     Else
         ' No category columns present in Daily_Snapshot
         On Error Resume Next
-        Set co = GetOrCreateChart(wsDash, "Portfolio_Catagory")
-        co.Chart.ChartTitle.Text = "Portfolio_Catagory (no categories)"
+        Set co = GetOrCreateChart(wsDash, "Portfolio_Category")
+        co.Chart.ChartTitle.Text = "Portfolio_Category (no categories)"
         On Error GoTo 0
     End If
 
@@ -1083,16 +1083,21 @@ Private Function GetOrCreateChart(ws As Worksheet, ByVal chartName As String) As
                 Exit For
             End If
         Next alt
-        ' Legacy rename support: if requesting Portfolio_Catagory, also look for Portfolio_Group
+        ' Legacy rename support for Portfolio_Category (accept earlier names and typos)
         If co Is Nothing Then
-            If StrComp(chartName, "Portfolio_Catagory", vbTextCompare) = 0 Then
+            If StrComp(chartName, "Portfolio_Category", vbTextCompare) = 0 Then
                 On Error Resume Next
-                Set co = ws.ChartObjects("Portfolio_Group")
+                Set co = ws.ChartObjects("Portfolio_Catagory")
+                If co Is Nothing Then Set co = ws.ChartObjects("Portfolio Category")
+                If co Is Nothing Then Set co = ws.ChartObjects("Portfolio_Catagory ")
+                If co Is Nothing Then Set co = ws.ChartObjects("Portfolio_Group")
                 If co Is Nothing Then Set co = ws.ChartObjects("Portfolio Group")
                 On Error GoTo 0
                 If Not co Is Nothing Then
                     On Error Resume Next
                     co.Name = chartName
+                    co.Chart.HasTitle = True
+                    co.Chart.ChartTitle.Text = chartName
                     On Error GoTo 0
                 End If
             End If

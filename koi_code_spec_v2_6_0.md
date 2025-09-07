@@ -1,5 +1,5 @@
-# KOI Trading Portfolio Workbook Spec (v2.6.0)
-Generated: 2025-09-06
+# KOI Trading Portfolio Workbook Spec (v2.6.2)
+Generated: 2025-09-07
 
 ## Overview
 Excel/VBA workbook to aggregate crypto orders into positions, P&L, dashboard totals, and portfolio charts.
@@ -111,7 +111,9 @@ Core macros
 
 ## Charts (updated automatically)
 - From Update_All_Position (on Position sheet):
-  - Cash vs Coin, Portfolio1, Portfolio2 — behavior unchanged from v2.5.0.
+  - Cash vs Coin
+  - Portfolio_Category_Daily: pie by group (BTC, Alt.TOP, Alt.MID, Alt.LOW)
+  - Portfolio_Coin: pie by coin weights (per‑coin breakdown)
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
@@ -120,7 +122,13 @@ Core macros
   - SHEET_PORTFOLIO = "Position"
   - SHEET_ORDERS    = "Order_History"
   - SHEET_SNAPSHOT  = "Daily_Snapshot"
-  - SHEET_CATEGORY  = "Catagory"  (fallback to "Category" accepted)
+  - SHEET_CATEGORY  = "Categoty"  (fallback to "Catagory" and "Category" accepted)
+  - CHART_PORTFOLIO1 = "Portfolio_Category_Daily"
+  - CHART_PORTFOLIO2 = "Portfolio_Coin"
+
+### Formatting Alignment
+- Position sheet number formats:
+  - The columns “Buy Qty”, “Sell Qty”, and “Available Qty” mirror the NumberFormat of the “Qty” column in `Order_History` (first numeric cell below header). If unavailable, fall back to the column format or a default based on `ROUND_QTY_DECIMALS`.
   - SHEET_DASHBOARD = "Dashboard"
 - Numbers & formats: DATE_FMT, MONEY_FMT, PRICE_FMT, PCT_FMT, SNAPSHOT_DATE_FMT, SNAPSHOT_NUMBER_FMT
 - Tolerances: EPS_ZERO, EPS_CLOSE
@@ -131,6 +139,9 @@ Core macros
   - NAV_MDD_ALIGN: "Center" | "Left" | "Right"
 
 ## Version History
+- v2.6.2:
+  - Position: renamed charts — `Portfolio1` → `Portfolio_Category_Daily`; `Portfolio2` → `Portfolio_Coin`.
+  - Position: quantity display format for “Buy Qty”, “Sell Qty”, and “Available Qty” now syncs with the `Order_History!Qty` column format.
 - v2.6.1:
   - Default Category sheet renamed to "Catagory" (intentional spelling); code accepts both "Catagory" and "Category".
   - Dashboard: added charts Cash vs NAV and Portfolio_Catagory (replaces legacy Portfolio_Group).

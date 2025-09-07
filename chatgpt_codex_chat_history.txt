@@ -103,3 +103,12 @@ If InStr(cname, "deposit") > 0 Or InStr(cname, "withdraw") > 0 Or InStr(cname, "
 - Đổi tên sheet nhóm thành “Categoty” (theo cập nhật). Code nay thử lần lượt: `SHEET_CATEGORY` → "Categoty" → "Catagory" → "Category".
 - Cập nhật hằng số `SHEET_CATEGORY = "Categoty"` trong `Mod_Config.bas`.
 - Điều chỉnh đặc tả: chuẩn hoá mục Sheet Category thành “Categoty / Catagory / Category”.
+
+🕒 Log: 2025-09-07T08:27:48Z
+📦 Modules: Mod_Config.bas; mod_position.bas
+✅ Những gì đã làm/đã quyết định
+- Đổi tên chart trên sheet Position:
+  - `Portfolio1` → `Portfolio_Category_Daily`
+  - `Portfolio2` → `Portfolio_Coin`
+- Cập nhật hằng số trong `Mod_Config.bas` và thêm logic tương thích ngược:
+  - Khi tìm chart, nếu gặp tên cũ/tiêu đề cũ sẽ tự đổi tên sang tên mới và cập nhật ChartTitle.
