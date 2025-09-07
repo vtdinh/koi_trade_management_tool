@@ -32,11 +32,11 @@ Core macros
   - Buy cash  = Qty*Price + Fee
   - Sell cash = Qty*Price - Fee
 
-### Category (SHEET_CATEGORY)
-- Sheet name default: "Category" (also accepts "Categories").
-- Two supported layouts:
-  1) Mapping layout: row 1 headers "Coin | Group", rows below map each coin to a group name.
-  2) Column layout: row 1 contains group names (e.g., BTC, Alt.TOP, Alt.MID, Alt.LOW); coins are listed beneath each column.
+### Categoty / Catagory / Category (SHEET_CATEGORY)
+- Sheet name default: "Categoty" (current, intentional), also accepts "Catagory" and "Category".
+- Supported layouts:
+  1) Mapping layout: row 1 headers "Coin | Group"; rows below map each coin to a group name.
+  2) Column layout: row 1 contains group names (e.g., BTC, Alt.TOP, Alt.MID, Alt.LOW); coins are listed beneath each column under the appropriate group.
 
 ### Daily_Snapshot (SHEET_SNAPSHOT)
 - Structure (A:L): Date | Cash | Coin | NAV | Total deposit | Total withdraw | Total profit | BTC | Alt.TOP | Alt.MID | Alt.LOW | Holdings
@@ -61,10 +61,20 @@ Core macros
   - PnL (ChartObject name: "PnL")
     - Series: Date (A) vs Total profit (G)
     - X axis: time scale; Y axis always placed at bottom
+    - No drawdown annotation on PnL (only NAV has drawdown text)
   - Deposit & Withdraw (ChartObject name: "Deposit")
     - Series 1: Date (A) vs Total deposit (E)
     - Series 2: Date (A) vs Total withdraw (F)
     - Legend enabled; no drawdown annotation
+  - Cash vs NAV (ChartObject name: "Cash vs NAV")
+    - Series: Date (A) vs Cash/NAV ratio (percent)
+    - Value axis as percent (e.g., 0–100%)
+  - Portfolio_Catagory (ChartObject name: "Portfolio_Catagory")
+    - Preferred computation: parse `Holdings` and map coins to groups using Catagory sheet; stack amounts per group (BTC, Alt.TOP, Alt.MID, Alt.LOW, then Others)
+    - Fallback: if no `Holdings` column, use snapshot group columns (H..)
+  - Portfolio_Alt.TOP / Portfolio_Alt.MID / Portfolio_Alt.LOW
+    - Per‑coin stacked amounts within each Alt group
+    - Group matching is punctuation/spacing tolerant (e.g., "Alt MID" == "Alt.MID")
 
 ## Time & Cutoff Rules
 - Order_History timestamps = UTC-4; converted to UTC+7 via +11h.
@@ -110,7 +120,7 @@ Core macros
   - SHEET_PORTFOLIO = "Position"
   - SHEET_ORDERS    = "Order_History"
   - SHEET_SNAPSHOT  = "Daily_Snapshot"
-  - SHEET_CATEGORY  = "Category"
+  - SHEET_CATEGORY  = "Catagory"  (fallback to "Category" accepted)
   - SHEET_DASHBOARD = "Dashboard"
 - Numbers & formats: DATE_FMT, MONEY_FMT, PRICE_FMT, PCT_FMT, SNAPSHOT_DATE_FMT, SNAPSHOT_NUMBER_FMT
 - Tolerances: EPS_ZERO, EPS_CLOSE
@@ -121,13 +131,19 @@ Core macros
   - NAV_MDD_ALIGN: "Center" | "Left" | "Right"
 
 ## Version History
+- v2.6.1:
+  - Default Category sheet renamed to "Catagory" (intentional spelling); code accepts both "Catagory" and "Category".
+  - Dashboard: added charts Cash vs NAV and Portfolio_Catagory (replaces legacy Portfolio_Group).
+  - Portfolio_Catagory prefers computing from Holdings + Catagory mapping; falls back to snapshot columns.
+  - Alt.* charts: tolerant group name comparison; avoid a lone "Other" by keeping all coins when all slices are tiny.
+  - GetOrCreateChart finds and renames legacy/typo chart names to the canonical ones.
+  - Kept drawdown annotation only on NAV; PnL drawdown removed.
 - v2.6.0:
   - New Update_Dashboard with three charts: NAV (with drawdown annotation), PnL, and combined Deposit & Withdraw.
   - Current drawdown = 0 when latest NAV equals all‑time high (tolerant by EPS_CLOSE).
   - PnL X axis always at bottom.
-  - Added SHEET_DASHBOARD and NAV_MDD_* config; corrected default SHEET_CATEGORY to "Category".
+  - Added SHEET_DASHBOARD and NAV_MDD_* config; default SHEET_CATEGORY older spec used "Category".
 - v2.5.0: Added Update_All_Snapshot (bulk daily backfill), standardized Daily_Snapshot A:L layout with group totals + Holdings string, chart reset to "No holdings" when empty, single-message run mode.
 - v2.4.x: Automatic chart updates (Cash vs Coin, Portfolio1 groups, Portfolio2 per-coin), Category sheet dual-layout support.
 - v2.3.0: Deposit/Withdraw/Total P&L aggregates, expanded Daily_Snapshot, clarified pricing/timezone.
 - v2.2.x: Position builder, cutoff normalization, Binance pricing, %PnL coloring, header auto-detection, stablecoin handling.
-

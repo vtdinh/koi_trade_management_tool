@@ -1,5 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
+' Last Modified (UTC): 2025-09-07T06:04:07Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
