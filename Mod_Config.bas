@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-07T08:20:45Z
+' Last Modified (UTC): 2025-09-11T12:33:54Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -28,7 +28,6 @@ Public Const SHEET_DASHBOARD As String = "Dashboard"
 
 ' Charts
 Public Const CHART_PORTFOLIO1 As String = "Portfolio_Category_Daily"
-Public Const CHART_PORTFOLIO2 As String = "Portfolio_Coin"
 
 ' Key cells on Position sheet
 Public Const CELL_CUTOFF       As String = "B3"  ' cutoff datetime (UTC+7)

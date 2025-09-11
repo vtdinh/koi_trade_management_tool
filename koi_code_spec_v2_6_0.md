@@ -1,5 +1,5 @@
-# KOI Trading Portfolio Workbook Spec (v2.6.2)
-Generated: 2025-09-07
+# KOI Trading Portfolio Workbook Spec (v2.7.0)
+Generated: 2025-09-10
 
 ## Overview
 Excel/VBA workbook to aggregate crypto orders into positions, P&L, dashboard totals, and portfolio charts.
@@ -79,10 +79,14 @@ Core macros
 ## Time & Cutoff Rules
 - Order_History timestamps = UTC-4; converted to UTC+7 via +11h.
 - Cutoff read from Position!B3 (UTC+7). If date-only, treat as end-of-day 23:59:59.
-- Pricing:
-  - If cutoff < today: fetch Binance D1 close.
-  - If cutoff = today: fetch realtime ticker.
-  - Fallback: SYMBOLUSDT -> SYMBOLUSDC -> SYMBOLBUSD.
+- Pricing source & priority:
+  - First try Binance:
+    - If cutoff < today: Binance D1 close (UTC-aligned candle close)
+    - If cutoff = today: Binance realtime ticker
+    - Fallback quote: SYMBOLUSDT -> SYMBOLUSDC -> SYMBOLBUSD
+  - If Binance has no price/symbol: use Exchange from Order_History (storage) for realtime price
+    - Supported: OKX, Bybit (spot ticker realtime)
+    - For historical dates on non-Binance, realtime is used as a safe fallback
   - Stablecoins (USDT/USDC/BUSD/FDUSD/TUSD) = 1.
 
 ## Position Building (Update_All_Position)
@@ -111,9 +115,11 @@ Core macros
 
 ## Charts (updated automatically)
 - From Update_All_Position (on Position sheet):
-  - Cash vs Coin
+  - Cash vs Coin (pie)
   - Portfolio_Category_Daily: pie by group (BTC, Alt.TOP, Alt.MID, Alt.LOW)
-  - Portfolio_Coin: pie by coin weights (per‑coin breakdown)
+  - Portfolio_Alt.TOP_Daily: pie by coin within Alt.TOP
+  - Portfolio_Alt.MID_Daily: pie by coin within Alt.MID
+  - Portfolio_Alt.LOW_Daily: pie by coin within Alt.LOW
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
@@ -124,7 +130,6 @@ Core macros
   - SHEET_SNAPSHOT  = "Daily_Snapshot"
   - SHEET_CATEGORY  = "Categoty"  (fallback to "Catagory" and "Category" accepted)
   - CHART_PORTFOLIO1 = "Portfolio_Category_Daily"
-  - CHART_PORTFOLIO2 = "Portfolio_Coin"
 
 ### Formatting Alignment
 - Position sheet number formats:
@@ -139,6 +144,11 @@ Core macros
   - NAV_MDD_ALIGN: "Center" | "Left" | "Right"
 
 ## Version History
+- v2.7.0:
+  - Pricing priority: Binance first (D1 close/realtime with USDC/BUSD fallback), then Exchange-specific realtime (OKX/Bybit) when Binance lacks the symbol.
+  - Position charts: added three daily pies — `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` — showing per-coin breakdowns within Alt groups.
+  - Removed per-coin pie `Portfolio_Coin` from Position.
+  - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.
 - v2.6.2:
   - Position: renamed charts — `Portfolio1` → `Portfolio_Category_Daily`; `Portfolio2` → `Portfolio_Coin`.
   - Position: quantity display format for “Buy Qty”, “Sell Qty”, and “Available Qty” now syncs with the `Order_History!Qty` column format.

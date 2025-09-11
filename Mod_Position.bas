@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-07T08:53:58Z
+' Last Modified (UTC): 2025-09-10T16:26:40Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -193,26 +193,36 @@ Public Sub Update_All_Position()
 
     ' --- Prefetch prices for Open positions only
     Dim priceMap As Object: Set priceMap = CreateObject("Scripting.Dictionary"): priceMap.CompareMode = vbTextCompare
-    Dim openCoins As Object: Set openCoins = CreateObject("Scripting.Dictionary"): openCoins.CompareMode = vbTextCompare
+    Dim openExByCoin As Object: Set openExByCoin = CreateObject("Scripting.Dictionary"): openExByCoin.CompareMode = vbTextCompare
 
     Dim i As Long, ss As Object
     For i = 1 To sessions.Count
         Set ss = sessions(i)
-        If ss("AvailableQty") > mod_config.EPS_CLOSE Then openCoins(ss("Coin")) = 1
+        If ss("AvailableQty") > mod_config.EPS_CLOSE Then
+            openExByCoin(ss("Coin")) = CStr(NzStr(ss("Storage")))
+        End If
     Next i
 
-    Dim coin As Variant, sym As String, px As Variant
-    If openCoins.Count > 0 Then
-        For Each coin In openCoins.Keys
-            sym = MapCoinToBinanceSymbol(CStr(coin))
+    Dim coin As Variant, exName As String, px As Variant
+    If openExByCoin.Count > 0 Then
+        For Each coin In openExByCoin.Keys
+            exName = CStr(openExByCoin(coin))
+            Dim sym As String: sym = MapCoinToBinanceSymbol(CStr(coin))
+            ' 1) Try Binance first (D1 close for history, realtime for today)
             If dayCutoffUTC7 < todayUTC7 Then
-                px = GetBinanceDailyCloseUTC(sym, dayCutoffUTC7)  ' interpret cutoff date as UTC day
+                px = GetBinanceDailyCloseUTC(sym, dayCutoffUTC7)
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
+            ' 1b) Binance quote fallback to USDC/BUSD if USDT primary failed
             If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
                 px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
             End If
+            ' 2) If Binance unavailable, try the exchange from Order_History (storage)
+            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 And LCase$(exName) <> "binance" Then
+                px = GetRealtimePriceByExchange(exName, CStr(coin))
+            End If
+            ' 3) Stablecoin fixed price
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(CStr(coin)) Then px = 1#
             If IsNumeric(px) And px > 0 Then priceMap(coin) = CDbl(px)
         Next coin
@@ -226,7 +236,7 @@ Public Sub Update_All_Position()
     Dim mktPrice As Variant, availBal As Variant, profitVal As Variant, pnlPctVal As Variant
     Dim avgBuy As Variant, avgSell As Variant, posText As String
     Dim totalHoldValue As Double: totalHoldValue = 0#
-    ' Per-coin holdings for Portfolio2 chart
+    ' Per-coin holdings for Alt.*_Daily pies
     Dim coinVals As Object: Set coinVals = CreateObject("Scripting.Dictionary"): coinVals.CompareMode = vbTextCompare
 
     For i = 1 To sessions.Count
@@ -271,7 +281,9 @@ Public Sub Update_All_Position()
         WriteCellSafe wsP, rowOut, portCols("available qty"), RoundN(ss("AvailableQty"), 3)
 
         If IsNumeric(ss("Cost")) Then ss("Cost") = RoundN(ss("Cost"), 0)
-        If IsNumeric(avgBuy) Then avgBuy = RoundN(avgBuy, 0)
+        ' Keep average prices with price precision (do not round to 0)
+        If IsNumeric(avgBuy) Then avgBuy = RoundN(avgBuy, mod_config.ROUND_PRICE_DECIMALS)
+        If IsNumeric(avgSell) Then avgSell = RoundN(avgSell, mod_config.ROUND_PRICE_DECIMALS)
         If IsNumeric(ss("SellProceeds")) Then ss("SellProceeds") = RoundN(ss("SellProceeds"), 0)
         If IsNumeric(availBal) Then availBal = RoundN(availBal, 0)
         If IsNumeric(profitVal) Then profitVal = RoundN(profitVal, 0)
@@ -297,12 +309,16 @@ Public Sub Update_All_Position()
 
         ' Accumulate per-coin value for open positions
         If posText = "Open" Then
-            If IsNumeric(availBal) And CDbl(availBal) > 0 Then
-                Dim ckey As String: ckey = CStr(ss("Coin"))
-                If coinVals.Exists(ckey) Then
-                    coinVals(ckey) = CDbl(coinVals(ckey)) + CDbl(availBal)
-                Else
-                    coinVals(ckey) = CDbl(availBal)
+            ' In VBA, logical And is not short-circuit; evaluate IsNumeric first to avoid
+            ' type mismatch when availBal is vbNullString/Empty.
+            If IsNumeric(availBal) Then
+                If CDbl(availBal) > 0 Then
+                    Dim ckey As String: ckey = CStr(ss("Coin"))
+                    If coinVals.Exists(ckey) Then
+                        coinVals(ckey) = CDbl(coinVals(ckey)) + CDbl(availBal)
+                    Else
+                        coinVals(ckey) = CDbl(availBal)
+                    End If
                 End If
             End If
         End If
@@ -376,8 +392,9 @@ Public Sub Update_All_Position()
     UpdateCashCoinChart wsP
     ' Portfolio breakdown (BTC / Alt.TOP / Alt.MID / Alt.LOW)
     Update_Portfolio1_FromCategory
-    ' Portfolio2: per-coin holdings breakdown
-    UpdatePortfolio2_FromCoinValues wsP, coinVals
+    ' Portfolio2 per-coin pie removed per request
+    ' Alt daily pies: per-coin within Alt.TOP/MID/LOW (on Position sheet)
+    UpdatePortfolioAltDailyPies wsP, coinVals
 
     ' --- Clear tail & format
     Dim lastRowPos As Long: lastRowPos = rowOut - 1
@@ -446,21 +463,22 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
         posVal = Trim$(CStr(wsP.Cells(r, portCols("Position")).Value))
 
         If Len(coin) > 0 And StrComp(posVal, "Open", vbTextCompare) = 0 Then
+            ' Prefer Binance first (realtime or D1 close), then fallback to the row's exchange (OKX/Bybit)
+            Dim exName As String: exName = ""
+            If portCols("storage") > 0 Then exName = Trim$(CStr(wsP.Cells(r, portCols("storage")).Value))
             sym = MapCoinToBinanceSymbol(coin)
-
             If dayCutoffUTC7 < todayUTC7 Then
-                ' Interpret the same calendar date as UTC for D1 close (Binance daily candles are UTC-aligned).
                 Dim dayUTC As Date: dayUTC = DateValue(cutoffUTC7)
                 px = GetBinanceDailyCloseUTC(sym, dayUTC)
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
-
-            ' Fallback to USDC/BUSD if USDT primary failed
             If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
                 px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
             End If
-
+            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 And LCase$(exName) <> "binance" Then
+                px = GetRealtimePriceByExchange(exName, coin)
+            End If
             ' Stablecoin -> 1
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(coin) Then px = 1#
 
@@ -634,7 +652,9 @@ Public Sub Update_Portfolio1_FromCategory()
         ElseIf coinToGroup.Exists(CStr(k)) Then
             grp = CStr(coinToGroup(k))
         Else
-            grp = "Alt.LOW" ' default bucket for unmapped alts
+            ' Unmapped coin → alert and stop per requirement
+            MsgBox "Coin """ & CStr(k) & """ is not in the Coin Category", vbExclamation
+            Exit Sub
         End If
         If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + v
     Next k
@@ -847,62 +867,88 @@ Fail:
     Set CreatePortfolio1Chart = Nothing
 End Function
 
-Private Sub UpdatePortfolio2_FromCoinValues(wsP As Worksheet, coinVals As Object)
-    On Error Resume Next
+
+' Create or update three pie charts on Position sheet showing per-coin breakdowns
+' within Alt.TOP, Alt.MID, and Alt.LOW groups for the current cutoff day.
+Private Sub UpdatePortfolioAltDailyPies(wsP As Worksheet, coinVals As Object)
+    On Error GoTo Done
+    Dim wsC As Worksheet
+    Set wsC = SheetByName(mod_config.SHEET_CATEGORY)
+    If wsC Is Nothing Then Set wsC = SheetByName("Categoty")
+    If wsC Is Nothing Then Set wsC = SheetByName("Catagory")
+    If wsC Is Nothing Then Set wsC = SheetByName("Category")
+    Dim mapCG As Object: Set mapCG = BuildCoinToGroupFromCategorySheet(wsC)
+
+    Dim topVals As Object, midVals As Object, lowVals As Object
+    Set topVals = CreateObject("Scripting.Dictionary"): topVals.CompareMode = vbTextCompare
+    Set midVals = CreateObject("Scripting.Dictionary"): midVals.CompareMode = vbTextCompare
+    Set lowVals = CreateObject("Scripting.Dictionary"): lowVals.CompareMode = vbTextCompare
+
+    If Not (coinVals Is Nothing) Then
+        Dim k As Variant, grp As String
+        For Each k In coinVals.Keys
+            grp = ""
+            If UCase$(CStr(k)) = "BTC" Then
+                grp = "BTC"
+            ElseIf Not (mapCG Is Nothing) And mapCG.Exists(CStr(k)) Then
+                grp = CStr(mapCG(CStr(k)))
+            End If
+            Select Case NormalizeHeader(grp)
+                Case NormalizeHeader("Alt.TOP")
+                    topVals(CStr(k)) = CDbl(coinVals(k))
+                Case NormalizeHeader("Alt.MID")
+                    midVals(CStr(k)) = CDbl(coinVals(k))
+                Case NormalizeHeader("Alt.LOW")
+                    lowVals(CStr(k)) = CDbl(coinVals(k))
+            End Select
+        Next k
+    End If
+
+    ApplyPerCoinPie wsP, "Portfolio_Alt.TOP_Daily", topVals
+    ApplyPerCoinPie wsP, "Portfolio_Alt.MID_Daily", midVals
+    ApplyPerCoinPie wsP, "Portfolio_Alt.LOW_Daily", lowVals
+Done:
+End Sub
+
+Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal vals As Object)
+    On Error GoTo Fail
     Dim co As ChartObject
     Set co = Nothing
-    Set co = wsP.ChartObjects(mod_config.CHART_PORTFOLIO2)
+    On Error Resume Next
+    Set co = wsP.ChartObjects(chartName)
     On Error GoTo 0
     If co Is Nothing Then
-        ' Try chart sheets
-        Dim chs As Chart
-        For Each chs In ThisWorkbook.Charts
-            If StrComp(chs.Name, mod_config.CHART_PORTFOLIO2, vbTextCompare) = 0 Then
-                ApplyPerCoinSeriesToChart chs, coinVals
-                Exit Sub
-            End If
-            If chs.HasTitle Then
-                If StrComp(chs.ChartTitle.Text, mod_config.CHART_PORTFOLIO2, vbTextCompare) = 0 Then
-                    ApplyPerCoinSeriesToChart chs, coinVals
-                    Exit Sub
-                End If
-            End If
-            ' Legacy names for Portfolio2 -> rename then use
-            If StrComp(chs.Name, "Portfolio2", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 2", vbTextCompare) = 0 Then
-                On Error Resume Next
-                chs.Name = mod_config.CHART_PORTFOLIO2
-                chs.HasTitle = True
-                chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
-                On Error GoTo 0
-                ApplyPerCoinSeriesToChart chs, coinVals
-                Exit Sub
-            End If
-            If chs.HasTitle Then
-                If StrComp(chs.ChartTitle.Text, "Portfolio2", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 2", vbTextCompare) = 0 Then
-                    On Error Resume Next
-                    chs.HasTitle = True
-                    chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
-                    On Error GoTo 0
-                    ApplyPerCoinSeriesToChart chs, coinVals
-                    Exit Sub
-                End If
-            End If
-        Next chs
-        ' Create if not found on Position sheet
-        Set co = CreatePortfolio2Chart(wsP)
-        If co Is Nothing Then Exit Sub
-    End If
-    ' If found on Position sheet with legacy name, rename it now
-    If Not co Is Nothing Then
-        If StrComp(co.Name, "Portfolio2", vbTextCompare) = 0 Or StrComp(co.Name, "Portfolio 2", vbTextCompare) = 0 Then
+        Set co = wsP.ChartObjects.Add(Left:=20, Top:=260, Width:=360, Height:=220)
+        co.Name = chartName
+        With co.Chart
+            .ChartType = xlPie
+            .HasTitle = True
+            .ChartTitle.Text = chartName
+            .HasLegend = True
+            Dim s As Series
+            If .SeriesCollection.Count = 0 Then Set s = .SeriesCollection.NewSeries Else Set s = .SeriesCollection(1)
+            s.XValues = Array("Coin A", "Coin B")
+            s.Values = Array(1, 1)
+            s.HasDataLabels = True
             On Error Resume Next
-            co.Name = mod_config.CHART_PORTFOLIO2
-            co.Chart.HasTitle = True
-            co.Chart.ChartTitle.Text = mod_config.CHART_PORTFOLIO2
+            s.DataLabels.ShowCategoryName = True
+            s.DataLabels.ShowPercentage = True
+            s.DataLabels.ShowValue = False
+            s.DataLabels.NumberFormat = "0%"
             On Error GoTo 0
-        End If
+        End With
     End If
-    ApplyPerCoinSeriesToChart co.Chart, coinVals
+
+    With co.Chart
+        .ChartType = xlPie
+        .HasTitle = True
+        .ChartTitle.Text = chartName
+        .HasLegend = True
+    End With
+
+    ApplyPerCoinSeriesToChart co.Chart, vals
+    Exit Sub
+Fail:
 End Sub
 
 Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Object)
@@ -962,36 +1008,6 @@ Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Objec
 Fail:
 End Sub
 
-Private Function CreatePortfolio2Chart(wsP As Worksheet) As ChartObject
-    On Error GoTo Fail
-    Dim co As ChartObject
-    Set co = wsP.ChartObjects.Add(Left:=680, Top:=20, Width:=360, Height:=220)
-    co.Name = mod_config.CHART_PORTFOLIO2
-    With co.Chart
-        .ChartType = xlPie
-        .HasTitle = True
-        .ChartTitle.Text = mod_config.CHART_PORTFOLIO2
-        Dim s As Series
-        If .SeriesCollection.Count = 0 Then
-            Set s = .SeriesCollection.NewSeries
-        Else
-            Set s = .SeriesCollection(1)
-        End If
-        s.XValues = Array("Coin A", "Coin B")
-        s.Values = Array(1, 1)
-        s.HasDataLabels = True
-        On Error Resume Next
-        s.DataLabels.ShowCategoryName = True
-        s.DataLabels.ShowPercentage = True
-        s.DataLabels.ShowValue = False
-        s.DataLabels.NumberFormat = "0%"
-        On Error GoTo 0
-    End With
-    Set CreatePortfolio2Chart = co
-    Exit Function
-Fail:
-    Set CreatePortfolio2Chart = Nothing
-End Function
 
 ' When there are no open holdings, reset a pie chart to a single "No holdings" slice
 Private Sub ResetPieChartToNoHoldings(ByVal ch As Chart)
@@ -1279,7 +1295,6 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
     ws.Range(ws.Cells(headerRow, MinCol(portCols)), ws.Cells(lastRow, MaxCol(portCols))).EntireColumn.AutoFit
     On Error GoTo 0
 End Sub
-
 ' Return the NumberFormat for the Qty column in Order_History
 Private Function GetOrderQtyNumberFormat() As String
     On Error GoTo Done
@@ -1753,6 +1768,78 @@ Private Function SafeRead(ws As Worksheet, ByVal r As Long, ByVal c As Long) As 
     Else
         SafeRead = vbNullString
     End If
+End Function
+
+Private Function GetRealtimePriceByExchange(ByVal exchangeName As String, ByVal coin As String) As Variant
+    Dim ex As String: ex = LCase$(Trim$(exchangeName))
+    If ex = "" Or ex = "binance" Then
+        GetRealtimePriceByExchange = GetBinanceRealtimePrice(MapCoinToBinanceSymbol(coin))
+        Exit Function
+    End If
+    If ex = "okx" Or ex = "okex" Then
+        GetRealtimePriceByExchange = GetOkxRealtimePrice(MapCoinToOkxInstId(coin))
+        Exit Function
+    End If
+    If ex = "bybit" Then
+        GetRealtimePriceByExchange = GetBybitRealtimePrice(MapCoinToBybitSymbol(coin))
+        Exit Function
+    End If
+    ' Unknown exchange -> try Binance
+    GetRealtimePriceByExchange = GetBinanceRealtimePrice(MapCoinToBinanceSymbol(coin))
+End Function
+
+Private Function MapCoinToOkxInstId(ByVal coin As String) As String
+    Dim c As String: c = UCase$(Trim$(coin))
+    c = Replace$(c, "/", "")
+    c = Replace$(c, "-", "")
+    If Right$(c, 4) = "USDT" Then
+        MapCoinToOkxInstId = Left$(c, Len(c) - 4) & "-USDT"
+    Else
+        MapCoinToOkxInstId = c & "-USDT"
+    End If
+End Function
+
+Private Function MapCoinToBybitSymbol(ByVal coin As String) As String
+    MapCoinToBybitSymbol = MapCoinToBinanceSymbol(coin) ' same format: BTCUSDT
+End Function
+
+Private Function GetOkxRealtimePrice(ByVal instId As String) As Variant
+    On Error GoTo Fail
+    Dim url As String: url = "https://www.okx.com/api/v5/market/ticker?instId=" & instId
+    Dim s As String: s = HttpGet(url)
+    If Len(s) = 0 Then GoTo Fail
+    ' Find "last":"<price>"
+    Dim i As Long, j As Long
+    i = InStr(1, s, "last", vbTextCompare): If i = 0 Then GoTo Fail
+    i = InStr(i, s, ":", vbTextCompare): If i = 0 Then GoTo Fail
+    i = InStr(i, s, """", vbTextCompare): If i = 0 Then GoTo Fail
+    j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then GoTo Fail
+    GetOkxRealtimePrice = Val(Mid$(s, i + 1, j - i - 1))
+    Exit Function
+Fail:
+    GetOkxRealtimePrice = Empty
+End Function
+
+Private Function GetBybitRealtimePrice(ByVal symbol As String) As Variant
+    On Error GoTo Fail
+    Dim url As String
+    url = "https://api.bybit.com/v5/market/tickers?category=spot&symbol=" & symbol
+    Dim s As String: s = HttpGet(url)
+    If Len(s) = 0 Then GoTo Fail
+    ' Find "lastPrice":"<price>"
+    Dim i As Long, j As Long
+    i = InStr(1, s, "lastPrice", vbTextCompare): If i = 0 Then GoTo Fail
+    i = InStr(i, s, ":", vbTextCompare): If i = 0 Then GoTo Fail
+    i = InStr(i, s, """", vbTextCompare): If i = 0 Then GoTo Fail
+    j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then GoTo Fail
+    GetBybitRealtimePrice = Val(Mid$(s, i + 1, j - i - 1))
+    Exit Function
+Fail:
+    GetBybitRealtimePrice = Empty
+End Function
+
+Private Function NzStr(ByVal v As Variant) As String
+    If IsError(v) Or IsEmpty(v) Then NzStr = "" Else NzStr = CStr(v)
 End Function
 
 ' =============================================================================
