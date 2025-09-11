@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-11T12:33:54Z
+' Last Modified (UTC): 2025-09-11T21:59:27Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -27,7 +27,8 @@ Public Const SHEET_CATEGORY  As String = "Categoty"   ' mapping Coin -> Group (s
 Public Const SHEET_DASHBOARD As String = "Dashboard"
 
 ' Charts
-Public Const CHART_PORTFOLIO1 As String = "Portfolio_Category_Daily"
+' Position sheet group pie (legacy names auto-renamed in code)
+Public Const CHART_PORTFOLIO1 As String = "Coin Category"
 
 ' Key cells on Position sheet
 Public Const CELL_CUTOFF       As String = "B3"  ' cutoff datetime (UTC+7)

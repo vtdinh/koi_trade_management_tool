@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-10T16:26:40Z
+' Last Modified (UTC): 2025-09-11T22:28:40Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -585,6 +585,8 @@ Public Sub Update_Portfolio1_FromCategory()
     Dim wsP As Worksheet, wsC As Worksheet
     Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
     If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
+    ' Proactively normalize any legacy chart object/title to the new canonical name
+    EnsureCoinCategoryChartName wsP, mod_config.CHART_PORTFOLIO1
     Set wsC = SheetByName(mod_config.SHEET_CATEGORY)
     ' Fallbacks for common spellings
     If wsC Is Nothing Then Set wsC = SheetByName("Category")
@@ -652,9 +654,8 @@ Public Sub Update_Portfolio1_FromCategory()
         ElseIf coinToGroup.Exists(CStr(k)) Then
             grp = CStr(coinToGroup(k))
         Else
-            ' Unmapped coin → alert and stop per requirement
-            MsgBox "Coin """ & CStr(k) & """ is not in the Coin Category", vbExclamation
-            Exit Sub
+            ' Unmapped coin → skip (do not block chart update/rename)
+            grp = vbNullString
         End If
         If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + v
     Next k
@@ -686,8 +687,10 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
                 If co Is Nothing Then
                     If StrComp(coIt.Name, "Portfolio1", vbTextCompare) = 0 _
                        Or StrComp(coIt.Name, "Portfolio 1", vbTextCompare) = 0 _
+                       Or StrComp(coIt.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
                        Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0) _
-                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0) Then
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0) _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0) Then
                         On Error Resume Next
                         coIt.Name = mod_config.CHART_PORTFOLIO1
                         coIt.Chart.HasTitle = True
@@ -715,7 +718,7 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
                 End If
             End If
             ' Legacy chart sheet names/titles -> rename then use
-            If StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Then
+            If StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
                 On Error Resume Next
                 chs.Name = mod_config.CHART_PORTFOLIO1
                 chs.HasTitle = True
@@ -725,7 +728,7 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
                 Exit Function
             End If
             If chs.HasTitle Then
-                If StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then
+                If StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
                     On Error Resume Next
                     chs.HasTitle = True
                     chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
@@ -744,6 +747,98 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
 
 Done:
 End Function
+
+' Ensure any legacy chart object or title is renamed to the canonical coin category name
+Private Sub EnsureCoinCategoryChartName(wsP As Worksheet, ByVal canonical As String)
+    On Error Resume Next
+    Dim co As ChartObject
+    ' Direct match by old names
+    For Each co In wsP.ChartObjects
+        If co Is Nothing Then GoTo NextOne
+        If StrComp(co.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+           Or StrComp(co.Name, "Portfolio1", vbTextCompare) = 0 _
+           Or StrComp(co.Name, "Portfolio 1", vbTextCompare) = 0 Then
+            co.Name = canonical
+            co.Chart.HasTitle = True
+            co.Chart.ChartTitle.Text = canonical
+        ElseIf co.Chart.HasTitle Then
+            If StrComp(co.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+               Or StrComp(co.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
+               Or StrComp(co.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then
+                co.Name = canonical
+                co.Chart.HasTitle = True
+                co.Chart.ChartTitle.Text = canonical
+            End If
+        End If
+NextOne:
+    Next co
+    On Error GoTo 0
+End Sub
+
+' Strong normalization: rename legacy charts to canonical or delete duplicates (embedded and chart sheets)
+Private Sub ForceNormalizeCoinCategoryCharts(wsP As Worksheet, ByVal canonical As String)
+    On Error Resume Next
+    Dim hasCanon As Boolean
+    Dim co As ChartObject, chs As Chart
+    ' Detect existing canonical
+    Set co = Nothing
+    Set co = wsP.ChartObjects(canonical)
+    hasCanon = Not (co Is Nothing)
+    If Not hasCanon Then
+        For Each chs In ThisWorkbook.Charts
+            If StrComp(chs.Name, canonical, vbTextCompare) = 0 Then hasCanon = True: Exit For
+        Next chs
+    End If
+
+    ' Embedded
+    For Each co In wsP.ChartObjects
+        If Not co Is Nothing Then
+            Dim isLegacy As Boolean: isLegacy = False
+            If StrComp(co.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+               Or StrComp(co.Name, "Portfolio1", vbTextCompare) = 0 _
+               Or StrComp(co.Name, "Portfolio 1", vbTextCompare) = 0 Then isLegacy = True
+            If Not isLegacy And co.Chart.HasTitle Then
+                If StrComp(co.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+                   Or StrComp(co.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
+                   Or StrComp(co.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then isLegacy = True
+            End If
+            If isLegacy Then
+                If hasCanon Then
+                    co.Delete
+                Else
+                    co.Name = canonical
+                    co.Chart.HasTitle = True
+                    co.Chart.ChartTitle.Text = canonical
+                    hasCanon = True
+                End If
+            End If
+        End If
+    Next co
+
+    ' Chart sheets
+    For Each chs In ThisWorkbook.Charts
+        Dim isLegacyCS As Boolean: isLegacyCS = False
+        If StrComp(chs.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+           Or StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 _
+           Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Then isLegacyCS = True
+        If Not isLegacyCS And chs.HasTitle Then
+            If StrComp(chs.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+               Or StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
+               Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then isLegacyCS = True
+        End If
+        If isLegacyCS Then
+            If hasCanon Then
+                chs.Delete
+            Else
+                chs.Name = canonical
+                chs.HasTitle = True
+                chs.ChartTitle.Text = canonical
+                hasCanon = True
+            End If
+        End If
+    Next chs
+    On Error GoTo 0
+End Sub
 
 Private Function ApplyPortfolioSeriesToChart(ByVal ch As Chart, ByVal gVals As Object) As Boolean
     On Error GoTo Fail
@@ -904,9 +999,9 @@ Private Sub UpdatePortfolioAltDailyPies(wsP As Worksheet, coinVals As Object)
         Next k
     End If
 
-    ApplyPerCoinPie wsP, "Portfolio_Alt.TOP_Daily", topVals
-    ApplyPerCoinPie wsP, "Portfolio_Alt.MID_Daily", midVals
-    ApplyPerCoinPie wsP, "Portfolio_Alt.LOW_Daily", lowVals
+    ApplyPerCoinPie wsP, "Alt.TOP", topVals
+    ApplyPerCoinPie wsP, "Alt.MID", midVals
+    ApplyPerCoinPie wsP, "Alt.LOW", lowVals
 Done:
 End Sub
 
@@ -917,6 +1012,29 @@ Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal v
     On Error Resume Next
     Set co = wsP.ChartObjects(chartName)
     On Error GoTo 0
+    ' If not found, try legacy names and rename to the new canonical chartName
+    If co Is Nothing Then
+        Dim alt As Variant, alts As Variant
+        Select Case chartName
+            Case "Alt.TOP": alts = Array("Portfolio_Alt.TOP_Daily", "Portfolio Alt.TOP Daily")
+            Case "Alt.MID": alts = Array("Portfolio_Alt.MID_Daily", "Portfolio Alt.MID Daily")
+            Case "Alt.LOW": alts = Array("Portfolio_Alt.LOW_Daily", "Portfolio Alt.LOW Daily")
+            Case Else:      alts = Array()
+        End Select
+        For Each alt In alts
+            On Error Resume Next
+            Set co = wsP.ChartObjects(CStr(alt))
+            On Error GoTo 0
+            If Not co Is Nothing Then
+                On Error Resume Next
+                co.Name = chartName
+                co.Chart.HasTitle = True
+                co.Chart.ChartTitle.Text = chartName
+                On Error GoTo 0
+                Exit For
+            End If
+        Next alt
+    End If
     If co Is Nothing Then
         Set co = wsP.ChartObjects.Add(Left:=20, Top:=260, Width:=360, Height:=220)
         co.Name = chartName

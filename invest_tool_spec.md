@@ -116,10 +116,10 @@ Core macros
 ## Charts (updated automatically)
 - From Update_All_Position (on Position sheet):
   - Cash vs Coin (pie)
-  - Portfolio_Category_Daily: pie by group (BTC, Alt.TOP, Alt.MID, Alt.LOW)
-  - Portfolio_Alt.TOP_Daily: pie by coin within Alt.TOP
-  - Portfolio_Alt.MID_Daily: pie by coin within Alt.MID
-  - Portfolio_Alt.LOW_Daily: pie by coin within Alt.LOW
+  - Coin Category: pie by group (BTC, Alt.TOP, Alt.MID, Alt.LOW)
+  - Alt.TOP: pie by coin within Alt.TOP
+  - Alt.MID: pie by coin within Alt.MID
+  - Alt.LOW: pie by coin within Alt.LOW
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
