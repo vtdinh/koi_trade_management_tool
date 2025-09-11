@@ -5,7 +5,7 @@ Generated: 2025-09-10
 Excel/VBA workbook to aggregate crypto orders into positions, P&L, dashboard totals, and portfolio charts.
 
 Core macros
-- Update_All_Position: rebuilds Position table up to the cutoff, computes Cash/Coin/NAV, Deposit/Withdraw/Total PnL, formats the sheet, and updates portfolio charts (Cash vs Coin, Portfolio1, Portfolio2). Shows a single final message on completion.
+- Update_All_Position: rebuilds Position table up to the cutoff, computes Cash/Coin/NAV, Deposit/Withdraw/Total PnL, formats the sheet, and updates portfolio charts (Cash vs Coin, Portfolio_Category_Daily, Portfolio_Alt.TOP_Daily, Portfolio_Alt.MID_Daily, Portfolio_Alt.LOW_Daily). Shows a single final message on completion.
 - Update_MarketPrice_ByCutoff_OpenOnly_Simple: updates Market Price for Open rows only using cutoff rules (see Time & Cutoff). Stablecoins are priced at 1.
 - Take_Daily_Snapshot: upserts a row per date into Daily_Snapshot (see layout below).
 - Update_All_Snapshot: fills all missing daily snapshot rows from Daily_Snapshot!A2 (start date) to Position!B3 (cutoff). For each missing date it sets the cutoff, rebuilds Position (silent), writes the snapshot, then restores the original cutoff.
@@ -69,7 +69,7 @@ Core macros
   - Cash vs NAV (ChartObject name: "Cash vs NAV")
     - Series: Date (A) vs Cash/NAV ratio (percent)
     - Value axis as percent (e.g., 0–100%)
-  - Portfolio_Catagory (ChartObject name: "Portfolio_Catagory")
+  - Portfolio_Category (ChartObject name: "Portfolio_Category")
     - Preferred computation: parse `Holdings` and map coins to groups using Catagory sheet; stack amounts per group (BTC, Alt.TOP, Alt.MID, Alt.LOW, then Others)
     - Fallback: if no `Holdings` column, use snapshot group columns (H..)
   - Portfolio_Alt.TOP / Portfolio_Alt.MID / Portfolio_Alt.LOW
@@ -154,8 +154,8 @@ Core macros
   - Position: quantity display format for “Buy Qty”, “Sell Qty”, and “Available Qty” now syncs with the `Order_History!Qty` column format.
 - v2.6.1:
   - Default Category sheet renamed to "Catagory" (intentional spelling); code accepts both "Catagory" and "Category".
-  - Dashboard: added charts Cash vs NAV and Portfolio_Catagory (replaces legacy Portfolio_Group).
-  - Portfolio_Catagory prefers computing from Holdings + Catagory mapping; falls back to snapshot columns.
+  - Dashboard: added charts Cash vs NAV and Portfolio_Category (replaces legacy Portfolio_Group).
+  - Portfolio_Category prefers computing from Holdings + Catagory mapping; falls back to snapshot columns.
   - Alt.* charts: tolerant group name comparison; avoid a lone "Other" by keeping all coins when all slices are tiny.
   - GetOrCreateChart finds and renames legacy/typo chart names to the canonical ones.
   - Kept drawdown annotation only on NAV; PnL drawdown removed.
