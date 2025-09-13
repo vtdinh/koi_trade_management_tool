@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-13T08:00:00Z
+' Last Modified (UTC): 2025-09-13T08:15:00Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -1221,69 +1221,7 @@ NextOne:
 End Sub
 
 ' Strong normalization: rename legacy charts to canonical or delete duplicates (embedded and chart sheets)
-Private Sub ForceNormalizeCoinCategoryCharts(wsP As Worksheet, ByVal canonical As String)
-    On Error Resume Next
-    Dim hasCanon As Boolean
-    Dim co As ChartObject, chs As Chart
-    ' Detect existing canonical
-    Set co = Nothing
-    Set co = wsP.ChartObjects(canonical)
-    hasCanon = Not (co Is Nothing)
-    If Not hasCanon Then
-        For Each chs In ThisWorkbook.Charts
-            If StrComp(chs.Name, canonical, vbTextCompare) = 0 Then hasCanon = True: Exit For
-        Next chs
-    End If
-
-    ' Embedded
-    For Each co In wsP.ChartObjects
-        If Not co Is Nothing Then
-            Dim isLegacy As Boolean: isLegacy = False
-            If StrComp(co.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-               Or StrComp(co.Name, "Portfolio1", vbTextCompare) = 0 _
-               Or StrComp(co.Name, "Portfolio 1", vbTextCompare) = 0 Then isLegacy = True
-            If Not isLegacy And co.Chart.HasTitle Then
-                If StrComp(co.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-                   Or StrComp(co.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
-                   Or StrComp(co.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then isLegacy = True
-            End If
-            If isLegacy Then
-                If hasCanon Then
-                    co.Delete
-                Else
-                    co.Name = canonical
-                    co.Chart.HasTitle = True
-                    co.Chart.ChartTitle.Text = canonical
-                    hasCanon = True
-                End If
-            End If
-        End If
-    Next co
-
-    ' Chart sheets
-    For Each chs In ThisWorkbook.Charts
-        Dim isLegacyCS As Boolean: isLegacyCS = False
-        If StrComp(chs.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-           Or StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 _
-           Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Then isLegacyCS = True
-        If Not isLegacyCS And chs.HasTitle Then
-            If StrComp(chs.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-               Or StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
-               Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then isLegacyCS = True
-        End If
-        If isLegacyCS Then
-            If hasCanon Then
-                chs.Delete
-            Else
-                chs.Name = canonical
-                chs.HasTitle = True
-                chs.ChartTitle.Text = canonical
-                hasCanon = True
-            End If
-        End If
-    Next chs
-    On Error GoTo 0
-End Sub
+ ' Removed unused ForceNormalizeCoinCategoryCharts (legacy normalization no longer called)
 
 Private Function ApplyPortfolioSeriesToChart(ByVal ch As Chart, ByVal gVals As Object) As Boolean
     On Error GoTo Fail
@@ -2335,13 +2273,7 @@ Fail:
 End Sub
 
 ' ============================= SNAPSHOT HELPER ===============================
-Private Function SafeRead(ws As Worksheet, ByVal r As Long, ByVal c As Long) As Variant
-    If c >= 1 Then
-        SafeRead = ws.Cells(r, c).Value
-    Else
-        SafeRead = vbNullString
-    End If
-End Function
+ ' Removed unused SafeRead helper (no references)
 
 Private Function GetRealtimePriceByExchange(ByVal exchangeName As String, ByVal coin As String) As Variant
     Dim ex As String: ex = LCase$(Trim$(exchangeName))
