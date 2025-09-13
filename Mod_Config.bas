@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T03:38:30Z
+' Last Modified (UTC): 2025-09-13T08:00:00Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -91,7 +91,7 @@ Public Const EPS_CLOSE As Double = 0.0001
 
 ' Snapshot formats (if needed by snapshot module)
 Public Const SNAPSHOT_DATE_FMT   As String = "yyyy-mm-dd"
-Public Const POS_DATE_AXIS_FMT  As String = "d-m-yy"            ' Position chart axis (e.g., 1-9-25)
+Public Const POS_DATE_AXIS_FMT  As String = "dd/mm/yy"          ' Position chart axis (e.g., 01/09/25)
 Public Const SNAPSHOT_NUMBER_FMT As String = "#,##0"
 
 ' Colors (as helpers returning Long)

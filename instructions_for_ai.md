@@ -41,13 +41,13 @@ When responding to user requests, follow these guidelines:
   - `Cash vs Coin` (pie)
   - `Coin Category` (pie by group: BTC, Alt.TOP, Alt.MID, Alt.LOW)
   - `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` (pie per coin within each Alt group)
-  - `NAV 3M` (line): last 3 months of NAV; legend hidden. When created, set X axis to Date axis (BaseUnit Days) with 3/14/12 format. Y‑axis is scaled each run with a 10% margin around 3‑month min/max, rounded to thousands.
+  - `NAV 3M` (line): last 3 months of NAV; legend hidden. X axis is a Date axis (BaseUnit Days) using `dd/mm/yy` via `mod_config.POS_DATE_AXIS_FMT`. Bind XValues to a worksheet helper date range (not an array) and set `PlotVisibleOnly=False` so hidden helper columns still plot. Y‑axis is scaled each run with a ~10% margin around 3‑month min/max, rounded to thousands.
 - Charts on Dashboard (maintained by `Update_Dashboard`): `NAV`, `Deposit`, `PnL`, `Cash vs NAV`, `Portfolio_Category`, `Portfolio_Alt.TOP`, `Portfolio_Alt.MID`, `Portfolio_Alt.LOW`.
 - Removed/Deprecated: `Portfolio_Coin` (aka `CHART_PORTFOLIO2`) is no longer used — do not reintroduce.
 
 ## Coding Conventions (VBA)
 - Use existing helpers for header mapping (`MapOrderHeaders`, `MapPortfolioHeaders`), sheet finding (`SheetByName`), and formatting. Do not hard‑code column indices.
-- When assigning to Excel series (`Series.Values`, `Series.XValues`), prefer arrays (Variant/Double) rather than ranges; clear or reuse the first series and delete extras as needed.
+- When assigning series: prefer arrays (Variant/Double) for `Series.Values`. For date categories, bind `Series.XValues` to a worksheet range of real Date cells (formatted), not a string array, to ensure a true time scale and proper tooltips. Delete extra series and reuse the first when updating.
 - Guard numeric conversions — VBA `And` is not short‑circuit. Do `If IsNumeric(x) Then If CDbl(x) > 0 Then ...` to avoid type mismatch.
 - Rounding: totals are integer money; prices use `ROUND_PRICE_DECIMALS`. Keep number formats from `mod_config` (`MONEY_FMT`, `PRICE_FMT`, `PCT_FMT`).
 - HTTP: use `MSXML2.XMLHTTP` (or `XMLHTTP.6.0` if you add a fallback). Keep requests simple; no external libraries.
@@ -61,6 +61,11 @@ When responding to user requests, follow these guidelines:
 - `%NAV` column: weight per open row = Available Balance / total NAV (closed rows 0%). Map header aliases include `%nav`, `nav%`, `% of nav`, `weight`, etc.
 - Percent formatting: `PCT_FMT="0.0%"`; allocation metrics respect `ROUND_PCT_DECIMALS`.
 - Column widths: `AUTOFIT_POSITION_COLUMNS=False` to preserve user widths.
+
+## NAV Sanity Check
+- Calculated NAV (`CELL_NAV=B9`) is compared with an optional “Real NAV” value at `CELL_NAV_REAL=C9`.
+- If the relative difference ≥ `CAPITAL_RULE_DIFF_THRESHOLD_PCT` (default 0.5%), the workbook writes `"Check NAV !"` to `CELL_NAV_ACTION=D9` in red/bold.
+- To disable the warning, clear `CELL_NAV_REAL`, increase the threshold, or remove the call to `checkCapitalRuleViolation`.
 
 ## File & Naming
 - Modules are named `mod_*`. Add new helpers only when necessary and keep them small.

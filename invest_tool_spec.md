@@ -117,6 +117,11 @@ Core macros
 - Total deposit = sum Deposit
 - Total withdraw = sum Withdraw
 - Total profit   = NAV - (Total deposit - Total withdraw)
+ 
+## NAV Sanity Check
+- The workbook optionally compares calculated NAV (Position `CELL_NAV=B9`) with a manual “Real NAV” (Position `CELL_NAV_REAL=C9`).
+- If the relative difference ≥ `CAPITAL_RULE_DIFF_THRESHOLD_PCT` (default 0.5%), it writes "Check NAV !" to `CELL_NAV_ACTION=D9` in red/bold.
+- To disable, clear `CELL_NAV_REAL`, increase the threshold, or remove the call to `checkCapitalRuleViolation` in `Update_All_Position`.
 
 ## Holdings Value
 - Built from Position table (rows Open).
@@ -130,7 +135,7 @@ Core macros
   - Alt.TOP: pie by coin within Alt.TOP
   - Alt.MID: pie by coin within Alt.MID
   - Alt.LOW: pie by coin within Alt.LOW
-  - NAV 3M (line): last 3 months of NAV, legend hidden; date axis set when created; Y-axis scaled each run with 10% margins and thousand rounding.
+  - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~10% margins around 3‑month min/max, rounded to thousands.
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
@@ -143,6 +148,9 @@ Core macros
   - CHART_PORTFOLIO1 = "Coin Category"
   - AUTOFIT_POSITION_COLUMNS = False (keep user column widths)
   - PCT_FMT = "0.0%" (one decimal for percents)
+  - POS_DATE_AXIS_FMT = "dd/mm/yy" (Position NAV 3M axis tick labels)
+  - CAPITAL_RULE_DIFF_THRESHOLD_PCT = 0.005 (0.5% NAV check threshold)
+  - CELL_NAV_REAL = C9; CELL_NAV_ACTION = D9 (Position sheet addresses for NAV sanity check)
 
 ### Formatting Alignment
 - Position sheet number formats:

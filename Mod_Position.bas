@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T04:02:30Z
+' Last Modified (UTC): 2025-09-13T08:00:00Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -861,6 +861,10 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
         created = True
     End If
     Set ch = co.Chart
+    ' Ensure chart can plot data from hidden helper column
+    On Error Resume Next
+    ch.PlotVisibleOnly = False
+    On Error GoTo 0
     ' Hide legend for a cleaner single-series chart
     On Error Resume Next
     ch.HasLegend = False
@@ -872,14 +876,24 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     For k = ch.SeriesCollection.Count To 2 Step -1: ch.SeriesCollection(k).Delete: Next k
 
     If cnt > 0 Then
-        ' Ensure X values are Excel date serials (Double) for robust recognition
-        Dim xsSerial() As Variant
-        ReDim xsSerial(1 To cnt)
+        ' Bind X to a worksheet date range so tooltips show dates, not serials
+        Dim helperCol As Long: helperCol = wsP.Columns.Count - 1 ' second-to-last column (hidden)
+        Dim dest As Range: Set dest = wsP.Range(wsP.Cells(2, helperCol), wsP.Cells(1 + cnt, helperCol))
+        Dim v2() As Variant: ReDim v2(1 To cnt, 1 To 1)
         For i = 1 To cnt
-            xsSerial(i) = CDbl(CDate(xs(i)))
+            v2(i, 1) = CDate(xs(i))
         Next i
-        s.XValues = xsSerial
+        dest.Value = v2
+        On Error Resume Next
+        dest.NumberFormat = mod_config.POS_DATE_AXIS_FMT
+        dest.NumberFormatLocal = mod_config.POS_DATE_AXIS_FMT
+        On Error GoTo 0
+        s.XValues = dest
         s.Values = ys
+        ' Hide helper column only after binding XValues
+        On Error Resume Next
+        wsP.Columns(helperCol).Hidden = True
+        On Error GoTo 0
     Else
         On Error Resume Next
         ch.SeriesCollection(1).Delete
@@ -893,10 +907,22 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
             .CategoryType = xlTimeScale           ' Date axis
             .BaseUnit = xlDays
             .TickLabels.NumberFormatLinked = False
-            .TickLabels.NumberFormat = "[$-en-US]m/d/yy"  ' 3/14/12 style
+            .TickLabels.NumberFormat = mod_config.POS_DATE_AXIS_FMT
+            .TickLabels.NumberFormatLocal = mod_config.POS_DATE_AXIS_FMT
         End With
         On Error GoTo 0
     End If
+
+    ' Ensure date axis format is applied even when chart already exists
+    On Error Resume Next
+    With ch.Axes(xlCategory)
+        .CategoryType = xlTimeScale
+        .BaseUnit = xlDays
+        .TickLabels.NumberFormatLinked = False
+        .TickLabels.NumberFormat = mod_config.POS_DATE_AXIS_FMT
+        .TickLabels.NumberFormatLocal = mod_config.POS_DATE_AXIS_FMT
+    End With
+    On Error GoTo 0
 
     ' ----- Thousand-rounded Y-axis bounds based on 3M NAV range
     Dim yMin As Double, yMax As Double, unit As Double
