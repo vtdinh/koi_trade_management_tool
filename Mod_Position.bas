@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-11T22:28:40Z
+' Last Modified (UTC): 2025-09-12T02:30:10Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -387,6 +387,11 @@ Public Sub Update_All_Position()
         .Range(mod_config.CELL_TOTAL_PNL & ":" & mod_config.CELL_TOTAL_PNL).NumberFormat = mod_config.MONEY_FMT
     End With
 
+    ' --- NAV metrics over last 3 months (from Daily_Snapshot)
+    UpdateNav3M_MetricsAndChart wsP, dayCutoffUTC7, totalNAV
+    ' --- Allocation metrics (%Coin, %BTC, %Alt.*, Num Alt.* coins)
+    UpdateAllocationMetrics wsP, coinVals, totalHoldValue, totalNAV
+
     ' --- Update charts
     ' Cash vs Coin (keep chart type)
     UpdateCashCoinChart wsP
@@ -510,6 +515,251 @@ End Sub
 ' =============================================================================
 ' ======================== CHART UPDATE HELPERS ===============================
 ' =============================================================================
+Private Sub UpdateAllocationMetrics(wsP As Worksheet, ByVal coinVals As Object, ByVal totalCoinVal As Double, ByVal totalNAV As Double)
+    On Error GoTo Done
+    ' Build percent format based on config
+    Dim fmtPct As String
+    If mod_config.ROUND_PCT_DECIMALS <= 0 Then
+        fmtPct = "0%"
+    Else
+        fmtPct = "0." & String(mod_config.ROUND_PCT_DECIMALS, "0") & "%"
+    End If
+
+    ' %Coin = Coin / NAV
+    If Len(mod_config.CELL_PCT_COIN) > 0 Then
+        Dim pctCoin As Double
+        If totalNAV > mod_config.EPS_CLOSE Then pctCoin = totalCoinVal / totalNAV Else pctCoin = 0#
+        pctCoin = RoundN(pctCoin, mod_config.ROUND_PCT_DECIMALS + 2)
+        wsP.Range(mod_config.CELL_PCT_COIN).Value = pctCoin
+        On Error Resume Next: wsP.Range(mod_config.CELL_PCT_COIN).NumberFormat = fmtPct: On Error GoTo 0
+    End If
+
+    If coinVals Is Nothing Then GoTo Done
+
+    ' Build Category mapping
+    Dim wsC As Worksheet
+    Set wsC = SheetByName(mod_config.SHEET_CATEGORY)
+    If wsC Is Nothing Then Set wsC = SheetByName("Categoty")
+    If wsC Is Nothing Then Set wsC = SheetByName("Catagory")
+    If wsC Is Nothing Then Set wsC = SheetByName("Category")
+    Dim mapCG As Object: Set mapCG = BuildCoinToGroupFromCategorySheet(wsC)
+
+    Dim vBTC As Double: vBTC = 0#
+    Dim vTop As Double, vMid As Double, vLow As Double
+    Dim cTop As Long, cMid As Long, cLow As Long
+    vTop = 0#: vMid = 0#: vLow = 0#
+    cTop = 0: cMid = 0: cLow = 0
+
+    Dim k As Variant, name As String, grp As String, v As Double
+    For Each k In coinVals.Keys
+        name = CStr(k)
+        v = CDbl(coinVals(k))
+        If v > mod_config.EPS_CLOSE Then
+            If UCase$(name) = "BTC" Then
+                vBTC = vBTC + v
+            Else
+                grp = vbNullString
+                If Not (mapCG Is Nothing) And mapCG.Exists(name) Then grp = CStr(mapCG(name))
+                Select Case NormalizeHeader(grp)
+                    Case NormalizeHeader("Alt.TOP"): vTop = vTop + v: cTop = cTop + 1
+                    Case NormalizeHeader("Alt.MID"): vMid = vMid + v: cMid = cMid + 1
+                    Case NormalizeHeader("Alt.LOW"): vLow = vLow + v: cLow = cLow + 1
+                End Select
+            End If
+        End If
+    Next k
+
+    ' %BTC
+    If Len(mod_config.CELL_PCT_BTC) > 0 Then
+        Dim pctBtc As Double: If totalCoinVal > mod_config.EPS_CLOSE Then pctBtc = vBTC / totalCoinVal Else pctBtc = 0#
+        pctBtc = RoundN(pctBtc, mod_config.ROUND_PCT_DECIMALS + 2)
+        wsP.Range(mod_config.CELL_PCT_BTC).Value = pctBtc
+        On Error Resume Next: wsP.Range(mod_config.CELL_PCT_BTC).NumberFormat = fmtPct: On Error GoTo 0
+    End If
+    ' %Alt.TOP and count
+    If Len(mod_config.CELL_PCT_ALT_TOP) > 0 Then
+        Dim pctTop As Double: If totalCoinVal > mod_config.EPS_CLOSE Then pctTop = vTop / totalCoinVal Else pctTop = 0#
+        pctTop = RoundN(pctTop, mod_config.ROUND_PCT_DECIMALS + 2)
+        wsP.Range(mod_config.CELL_PCT_ALT_TOP).Value = pctTop
+        On Error Resume Next: wsP.Range(mod_config.CELL_PCT_ALT_TOP).NumberFormat = fmtPct: On Error GoTo 0
+    End If
+    If Len(mod_config.CELL_NUM_ALT_TOP) > 0 Then
+        wsP.Range(mod_config.CELL_NUM_ALT_TOP).Value = cTop
+        On Error Resume Next: wsP.Range(mod_config.CELL_NUM_ALT_TOP).NumberFormat = mod_config.MONEY_FMT: On Error GoTo 0
+    End If
+    ' %Alt.MID and count
+    If Len(mod_config.CELL_PCT_ALT_MID) > 0 Then
+        Dim pctMid As Double: If totalCoinVal > mod_config.EPS_CLOSE Then pctMid = vMid / totalCoinVal Else pctMid = 0#
+        pctMid = RoundN(pctMid, mod_config.ROUND_PCT_DECIMALS + 2)
+        wsP.Range(mod_config.CELL_PCT_ALT_MID).Value = pctMid
+        On Error Resume Next: wsP.Range(mod_config.CELL_PCT_ALT_MID).NumberFormat = fmtPct: On Error GoTo 0
+    End If
+    If Len(mod_config.CELL_NUM_ALT_MID) > 0 Then
+        wsP.Range(mod_config.CELL_NUM_ALT_MID).Value = cMid
+        On Error Resume Next: wsP.Range(mod_config.CELL_NUM_ALT_MID).NumberFormat = mod_config.MONEY_FMT: On Error GoTo 0
+    End If
+    ' %Alt.LOW and count
+    If Len(mod_config.CELL_PCT_ALT_LOW) > 0 Then
+        Dim pctLow As Double: If totalCoinVal > mod_config.EPS_CLOSE Then pctLow = vLow / totalCoinVal Else pctLow = 0#
+        pctLow = RoundN(pctLow, mod_config.ROUND_PCT_DECIMALS + 2)
+        wsP.Range(mod_config.CELL_PCT_ALT_LOW).Value = pctLow
+        On Error Resume Next: wsP.Range(mod_config.CELL_PCT_ALT_LOW).NumberFormat = fmtPct: On Error GoTo 0
+    End If
+    If Len(mod_config.CELL_NUM_ALT_LOW) > 0 Then
+        wsP.Range(mod_config.CELL_NUM_ALT_LOW).Value = cLow
+        On Error Resume Next: wsP.Range(mod_config.CELL_NUM_ALT_LOW).NumberFormat = mod_config.MONEY_FMT: On Error GoTo 0
+    End If
+    Exit Sub
+Done:
+End Sub
+Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Date, ByVal fallbackNav As Double)
+    On Error GoTo Done
+    Dim wsS As Worksheet: Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
+    If wsS Is Nothing Then GoTo Done
+
+    Dim fromDt As Date: fromDt = DateAdd("m", -3, cutoffDate)
+    Dim lastR As Long: lastR = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+
+    Dim r As Long, dt As Date, nav As Double
+    Dim cnt As Long: cnt = 0
+    Dim navATH As Double: navATH = 0#: Dim navATL As Double: navATL = 0#
+    Dim navAtCutoff As Variant: navAtCutoff = Empty
+
+    ' Count rows in window
+    For r = 2 To lastR
+        If IsDate(wsS.Cells(r, 1).Value) Then
+            dt = DateValue(wsS.Cells(r, 1).Value)
+            If dt >= fromDt And dt <= cutoffDate Then
+                cnt = cnt + 1
+            End If
+        End If
+    Next r
+
+    Dim xs() As Variant, ys() As Double
+    If cnt > 0 Then
+        ReDim xs(1 To cnt)
+        ReDim ys(1 To cnt)
+    End If
+
+    Dim i As Long: i = 0
+    For r = 2 To lastR
+        If IsDate(wsS.Cells(r, 1).Value) Then
+            dt = DateValue(wsS.Cells(r, 1).Value)
+            If dt >= fromDt And dt <= cutoffDate Then
+                i = i + 1
+                xs(i) = dt
+                If IsNumeric(wsS.Cells(r, 4).Value) Then nav = CDbl(wsS.Cells(r, 4).Value) Else nav = 0#
+                ys(i) = nav
+                If nav > 0 Then
+                    If navATH = 0# Or nav > navATH Then navATH = nav
+                    If navATL = 0# Or nav < navATL Then navATL = nav
+                End If
+                If dt = cutoffDate Then navAtCutoff = nav
+            End If
+        End If
+    Next r
+
+    If IsEmpty(navAtCutoff) Then navAtCutoff = fallbackNav
+
+    ' Write metrics if configured
+    If Len(mod_config.CELL_NAV_ATH) > 0 Then wsP.Range(mod_config.CELL_NAV_ATH).Value = Round(navATH, 0)
+    If Len(mod_config.CELL_NAV_ATL) > 0 Then wsP.Range(mod_config.CELL_NAV_ATL).Value = Round(navATL, 0)
+    If Len(mod_config.CELL_NAV_DD) > 0 Then
+        Dim dd As Double
+        If navATH > 0 Then dd = (navATH - CDbl(navAtCutoff)) / navATH Else dd = 0#
+        wsP.Range(mod_config.CELL_NAV_DD).Value = dd
+        On Error Resume Next
+        wsP.Range(mod_config.CELL_NAV_DD).NumberFormat = mod_config.PCT_FMT
+        On Error GoTo 0
+    End If
+    On Error Resume Next
+    If Len(mod_config.CELL_NAV_ATH) > 0 Then wsP.Range(mod_config.CELL_NAV_ATH).NumberFormat = mod_config.MONEY_FMT
+    If Len(mod_config.CELL_NAV_ATL) > 0 Then wsP.Range(mod_config.CELL_NAV_ATL).NumberFormat = mod_config.MONEY_FMT
+    On Error GoTo 0
+
+    ' Update NAV 3M chart
+    Dim co As ChartObject, ch As Chart
+    Dim created As Boolean: created = False
+    Set co = Nothing
+    On Error Resume Next
+    Set co = wsP.ChartObjects("NAV 3M")
+    On Error GoTo 0
+    If co Is Nothing Then
+        Set co = wsP.ChartObjects.Add(Left:=20, Top:=500, Width:=520, Height:=260)
+        co.Name = "NAV 3M"
+        co.Chart.HasTitle = True
+        co.Chart.ChartTitle.Text = "NAV 3M"
+        created = True
+    End If
+    Set ch = co.Chart
+    ' Hide legend for a cleaner single-series chart
+    On Error Resume Next
+    ch.HasLegend = False
+    On Error GoTo 0
+
+    Dim s As Series
+    If ch.SeriesCollection.Count = 0 Then Set s = ch.SeriesCollection.NewSeries Else Set s = ch.SeriesCollection(1)
+    Dim k As Long
+    For k = ch.SeriesCollection.Count To 2 Step -1: ch.SeriesCollection(k).Delete: Next k
+
+    If cnt > 0 Then
+        ' Ensure X values are Excel date serials (Double) for robust recognition
+        Dim xsSerial() As Variant
+        ReDim xsSerial(1 To cnt)
+        For i = 1 To cnt
+            xsSerial(i) = CDbl(CDate(xs(i)))
+        Next i
+        s.XValues = xsSerial
+        s.Values = ys
+    Else
+        On Error Resume Next
+        ch.SeriesCollection(1).Delete
+        On Error GoTo 0
+    End If
+    ch.ChartType = xlLine
+    ' Apply axis options when chart is created fresh (as per request)
+    If created Then
+        On Error Resume Next
+        With ch.Axes(xlCategory)
+            .CategoryType = xlTimeScale           ' Date axis
+            .BaseUnit = xlDays
+            .TickLabels.NumberFormatLinked = False
+            .TickLabels.NumberFormat = "[$-en-US]m/d/yy"  ' 3/14/12 style
+        End With
+        On Error GoTo 0
+    End If
+
+    ' ----- Thousand-rounded Y-axis bounds based on 3M NAV range
+    Dim yMin As Double, yMax As Double, unit As Double
+    unit = 1000#
+    If navATL > 0 Then
+        yMin = navATL * 0.9   ' 10% margin below
+    Else
+        yMin = 0#
+    End If
+    If navATH > 0 Then
+        yMax = navATH * 1.1   ' 10% margin above
+    Else
+        yMax = 1#
+    End If
+    ' Round to thousand boundaries: floor for min, ceiling for max
+    yMin = unit * Int(yMin / unit)
+    yMax = unit * Int((yMax + unit - 1#) / unit)
+    If yMax <= yMin Then yMax = yMin + unit
+
+    On Error Resume Next
+    With ch.Axes(xlValue)
+        .MinimumScaleIsAuto = False
+        .MaximumScaleIsAuto = False
+        .MinimumScale = yMin
+        .MaximumScale = yMax
+    End With
+    On Error GoTo 0
+    ch.Axes(xlValue).TickLabels.NumberFormat = mod_config.MONEY_FMT
+    On Error GoTo 0
+    Exit Sub
+Done:
+End Sub
 Private Sub UpdateCashCoinChart(wsP As Worksheet)
     On Error GoTo Done
     Dim co As ChartObject
@@ -1410,7 +1660,13 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
     ws.Range(ws.Cells(outStart, portCols("Open date")), ws.Cells(lastRow, portCols("Open date"))).NumberFormat = mod_config.DATE_FMT
     ws.Range(ws.Cells(outStart, portCols("Close date")), ws.Cells(lastRow, portCols("Close date"))).NumberFormat = mod_config.DATE_FMT
 
-    ws.Range(ws.Cells(headerRow, MinCol(portCols)), ws.Cells(lastRow, MaxCol(portCols))).EntireColumn.AutoFit
+    ' Respect config: keep existing column widths unless explicitly allowed
+    If mod_config.AUTOFIT_POSITION_COLUMNS Then
+        ' Avoid auto-fitting column A: start from column 2 if needed
+        Dim startCol As Long: startCol = MinCol(portCols)
+        If startCol < 2 Then startCol = 2
+        ws.Range(ws.Cells(headerRow, startCol), ws.Cells(lastRow, MaxCol(portCols))).EntireColumn.AutoFit
+    End If
     On Error GoTo 0
 End Sub
 ' Return the NumberFormat for the Qty column in Order_History
