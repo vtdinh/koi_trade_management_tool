@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T01:30:40Z
+' Last Modified (UTC): 2025-09-12T03:38:30Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -41,6 +41,19 @@ Public Const CELL_NAV_DD       As String = "B12"  ' NAV drawdown text/value
 Public Const CELL_SUM_DEPOSIT  As String = "B13"
 Public Const CELL_SUM_WITHDRAW As String = "B14"
 Public Const CELL_TOTAL_PNL    As String = "B15"
+
+' Capital rule check (Position sheet)
+Public Const CELL_NAV_REAL     As String = "C9"   ' Real NAV (user input)
+Public Const CELL_NAV_ACTION   As String = "D9"   ' Warning/Action cell
+Public Const CAPITAL_RULE_DIFF_THRESHOLD_PCT As Double = 0.005  ' 0.5%
+
+' NAV drawdown behavior
+Public Const NAV_DD_USE_TRUNCATED As Boolean = True            ' compute drawdown using truncated (0‑decimal) NAVs
+Public Const NAV_DD_TOLERANCE_PCT As Double = 0.001            ' <=0.1% → treat as 0%
+
+' NAV drawdown threshold & action (Position sheet)
+Public Const CELL_NAV_DD_LIMIT   As String = "C12"  ' threshold value (e.g., 30% as 0.30)
+Public Const CELL_NAV_DD_ACTION  As String = "D12"  ' action message cell
 
 ' Allocation and counts (today/cutoff)
 Public Const CELL_PCT_COIN     As String = "B18"  ' %Coin = Coin/NAV

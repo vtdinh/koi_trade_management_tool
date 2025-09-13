@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T02:46:10Z
+' Last Modified (UTC): 2025-09-12T03:52:10Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -379,7 +379,7 @@ Public Sub Update_All_Position()
     With wsP
         .Range(mod_config.CELL_CASH).Value = Round(totalCash, 0)
         .Range(mod_config.CELL_COIN).Value = Round(totalHoldValue, 0)
-        .Range(mod_config.CELL_NAV).Value = Round(totalNAV, 0)
+        .Range(mod_config.CELL_NAV).Value = Application.WorksheetFunction.RoundDown(totalNAV, 0)
 
         .Range(mod_config.CELL_SUM_DEPOSIT).Value = Round(sumDeposit, 0)
         .Range(mod_config.CELL_SUM_WITHDRAW).Value = Round(sumWithdraw, 0)
@@ -453,6 +453,11 @@ Public Sub Update_All_Position()
 
     SafeFormat wsP, portCols, rowOut - 1, hdrP, OUT_START
     If Len(statusMsg) = 0 Then statusMsg = "Positions, dashboard, and charts updated."
+
+    ' Capital rule check – write warning if NAV diff within threshold per config
+    On Error Resume Next
+    checkCapitalRuleViolation
+    On Error GoTo 0
 
 Clean:
     Application.EnableEvents = True
@@ -658,6 +663,52 @@ Private Sub UpdateAllocationMetrics(wsP As Worksheet, ByVal coinVals As Object, 
     Exit Sub
 Done:
 End Sub
+
+' ============================= CAPITAL RULE CHECK ============================
+Public Sub checkCapitalRuleViolation()
+    On Error GoTo Done
+    Dim ws As Worksheet
+    Set ws = SheetByName(mod_config.SHEET_PORTFOLIO)
+    If ws Is Nothing Then Exit Sub
+
+    Dim addrCalc As String, addrReal As String, addrAct As String
+    addrCalc = mod_config.CELL_NAV
+    addrReal = mod_config.CELL_NAV_REAL
+    addrAct = mod_config.CELL_NAV_ACTION
+    If Len(addrCalc) = 0 Or Len(addrReal) = 0 Or Len(addrAct) = 0 Then Exit Sub
+
+    Dim vCalc As Variant, vReal As Variant
+    vCalc = ws.Range(addrCalc).Value
+    vReal = ws.Range(addrReal).Value
+    Dim thr As Double: thr = mod_config.CAPITAL_RULE_DIFF_THRESHOLD_PCT
+
+    Dim warn As Boolean: warn = False
+    If IsNumeric(vCalc) And IsNumeric(vReal) Then
+        Dim calcD As Double, realD As Double
+        calcD = CDbl(vCalc): realD = CDbl(vReal)
+        If Abs(realD) > mod_config.EPS_CLOSE Then
+            Dim diffPct As Double
+            diffPct = Abs(calcD - realD) / Abs(realD)
+            ' Warn when difference is large (>= threshold)
+            If diffPct >= thr Then warn = True
+        End If
+    End If
+
+    WriteActionText ws, addrAct, IIf(warn, "Check NAV !", vbNullString), IIf(warn, vbRed, vbBlack), IIf(warn, True, False)
+Done:
+End Sub
+
+' Write text safely to a (possibly merged) cell address and apply basic formatting
+Private Sub WriteActionText(ByVal ws As Worksheet, ByVal addr As String, ByVal text As String, ByVal color As Long, ByVal isBold As Boolean)
+    On Error Resume Next
+    Dim rg As Range
+    Set rg = ws.Range(addr)
+    If rg.MergeCells Then Set rg = rg.MergeArea.Cells(1, 1)
+    rg.Value = text
+    rg.Font.Color = color
+    rg.Font.Bold = isBold
+    On Error GoTo 0
+End Sub
 Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Date, ByVal fallbackNav As Double)
     On Error GoTo Done
     Dim wsS As Worksheet: Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
@@ -706,17 +757,46 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     Next r
 
     If IsEmpty(navAtCutoff) Then navAtCutoff = fallbackNav
+    ' Ensure ATH/ATL consider today's live NAV (fallbackNav) even if snapshot row is missing
+    If IsNumeric(fallbackNav) Then
+        If CDbl(fallbackNav) > navATH Then navATH = CDbl(fallbackNav)
+        If navATL = 0# Or CDbl(fallbackNav) < navATL Then navATL = CDbl(fallbackNav)
+    End If
 
     ' Write metrics if configured
-    If Len(mod_config.CELL_NAV_ATH) > 0 Then wsP.Range(mod_config.CELL_NAV_ATH).Value = Round(navATH, 0)
-    If Len(mod_config.CELL_NAV_ATL) > 0 Then wsP.Range(mod_config.CELL_NAV_ATL).Value = Round(navATL, 0)
+    If Len(mod_config.CELL_NAV_ATH) > 0 Then wsP.Range(mod_config.CELL_NAV_ATH).Value = Application.WorksheetFunction.RoundDown(navATH, 0)
+    If Len(mod_config.CELL_NAV_ATL) > 0 Then wsP.Range(mod_config.CELL_NAV_ATL).Value = Application.WorksheetFunction.RoundDown(navATL, 0)
     If Len(mod_config.CELL_NAV_DD) > 0 Then
-        Dim dd As Double
-        If navATH > 0 Then dd = (navATH - CDbl(navAtCutoff)) / navATH Else dd = 0#
+        Dim dd As Double, baseAth As Double, baseCut As Double
+        baseAth = navATH
+        baseCut = CDbl(navAtCutoff)
+        If mod_config.NAV_DD_USE_TRUNCATED Then
+            baseAth = Application.WorksheetFunction.RoundDown(baseAth, 0)
+            baseCut = Application.WorksheetFunction.RoundDown(baseCut, 0)
+        End If
+        If baseAth > 0 Then
+            dd = (baseAth - baseCut) / baseAth
+            If dd < 0 Then dd = 0# ' never negative
+            If dd <= mod_config.NAV_DD_TOLERANCE_PCT Then dd = 0#
+        Else
+            dd = 0#
+        End If
         wsP.Range(mod_config.CELL_NAV_DD).Value = dd
         On Error Resume Next
         wsP.Range(mod_config.CELL_NAV_DD).NumberFormat = mod_config.PCT_FMT
         On Error GoTo 0
+
+        ' Compare with threshold in CELL_NAV_DD_LIMIT and write action in CELL_NAV_DD_ACTION
+        Dim lim As Variant
+        lim = wsP.Range(mod_config.CELL_NAV_DD_LIMIT).Value
+        If IsNumeric(lim) Then
+            Dim limD As Double: limD = CDbl(lim)
+            If dd >= limD And limD > 0 Then
+                WriteActionText wsP, mod_config.CELL_NAV_DD_ACTION, " Cut loss NOW!!!", vbRed, True
+            Else
+                WriteActionText wsP, mod_config.CELL_NAV_DD_ACTION, vbNullString, vbBlack, False
+            End If
+        End If
     End If
     On Error Resume Next
     If Len(mod_config.CELL_NAV_ATH) > 0 Then wsP.Range(mod_config.CELL_NAV_ATH).NumberFormat = mod_config.MONEY_FMT
