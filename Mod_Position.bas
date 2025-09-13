@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T03:52:10Z
+' Last Modified (UTC): 2025-09-12T04:02:30Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -438,6 +438,11 @@ Public Sub Update_All_Position()
         On Error GoTo 0
     End If
 
+    ' --- Portfolio rule checks (limits in column C → actions in column D)
+    On Error Resume Next
+    CheckPortfolioRuleViolations wsP
+    On Error GoTo 0
+
     ' --- Update charts
     ' Cash vs Coin (keep chart type)
     UpdateCashCoinChart wsP
@@ -708,6 +713,44 @@ Private Sub WriteActionText(ByVal ws As Worksheet, ByVal addr As String, ByVal t
     rg.Font.Color = color
     rg.Font.Bold = isBold
     On Error GoTo 0
+End Sub
+
+' ============================= PORTFOLIO RULES ===============================
+Private Sub CheckPortfolioRuleViolations(wsP As Worksheet)
+    On Error GoTo Done
+    Dim addrs(1 To 8) As String
+    addrs(1) = mod_config.CELL_PCT_COIN
+    addrs(2) = mod_config.CELL_PCT_BTC
+    addrs(3) = mod_config.CELL_PCT_ALT_TOP
+    addrs(4) = mod_config.CELL_NUM_ALT_TOP
+    addrs(5) = mod_config.CELL_PCT_ALT_MID
+    addrs(6) = mod_config.CELL_NUM_ALT_MID
+    addrs(7) = mod_config.CELL_PCT_ALT_LOW
+    addrs(8) = mod_config.CELL_NUM_ALT_LOW
+
+    Dim i As Long
+    For i = 1 To 8
+        If Len(addrs(i)) > 0 Then
+            Dim r As Long
+            r = wsP.Range(addrs(i)).Row
+            Dim valV As Variant, limV As Variant, label As String
+            valV = wsP.Range(addrs(i)).Value
+            limV = wsP.Cells(r, 3).Value   ' column C = limit
+            label = CStr(wsP.Cells(r, 1).Value) ' column A = label
+            If IsNumeric(valV) And IsNumeric(limV) Then
+                Dim v As Double, lim As Double
+                v = CDbl(valV): lim = CDbl(limV)
+                If lim > 0 And v >= lim Then
+                    WriteActionText wsP, wsP.Cells(r, 4).Address(False, False), "Reduce " & label, vbRed, True
+                Else
+                    WriteActionText wsP, wsP.Cells(r, 4).Address(False, False), vbNullString, vbBlack, False
+                End If
+            Else
+                WriteActionText wsP, wsP.Cells(r, 4).Address(False, False), vbNullString, vbBlack, False
+            End If
+        End If
+    Next i
+Done:
 End Sub
 Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Date, ByVal fallbackNav As Double)
     On Error GoTo Done
