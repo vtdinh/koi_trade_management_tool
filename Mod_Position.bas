@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-12T02:30:10Z
+' Last Modified (UTC): 2025-09-12T02:46:10Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -238,6 +238,8 @@ Public Sub Update_All_Position()
     Dim totalHoldValue As Double: totalHoldValue = 0#
     ' Per-coin holdings for Alt.*_Daily pies
     Dim coinVals As Object: Set coinVals = CreateObject("Scripting.Dictionary"): coinVals.CompareMode = vbTextCompare
+    ' Per-row available balance for Open positions to compute %NAV after NAV is known
+    Dim openRowVals As Object: Set openRowVals = CreateObject("Scripting.Dictionary"): openRowVals.CompareMode = vbTextCompare
 
     For i = 1 To sessions.Count
         Set ss = sessions(i)
@@ -306,6 +308,10 @@ Public Sub Update_All_Position()
         End If
         If portCols("available balance") > 0 Then _
             WriteCellSafe wsP, rowOut, portCols("available balance"), availBal
+        ' Collect for %NAV write later when totalNAV is available
+        If StrComp(posText, "Open", vbTextCompare) = 0 Then
+            If IsNumeric(availBal) Then openRowVals(CStr(rowOut)) = CDbl(availBal)
+        End If
 
         ' Accumulate per-coin value for open positions
         If posText = "Open" Then
@@ -387,10 +393,50 @@ Public Sub Update_All_Position()
         .Range(mod_config.CELL_TOTAL_PNL & ":" & mod_config.CELL_TOTAL_PNL).NumberFormat = mod_config.MONEY_FMT
     End With
 
+    ' --- Now write %NAV weights
+    If portCols("%NAV") > 0 Then
+        If totalNAV > mod_config.EPS_CLOSE Then
+            For Each k In openRowVals.Keys
+                wsP.Cells(CLng(k), portCols("%NAV")).Value = CDbl(openRowVals(k)) / totalNAV
+            Next k
+        Else
+            For Each k In openRowVals.Keys
+                wsP.Cells(CLng(k), portCols("%NAV")).Value = 0#
+            Next k
+        End If
+    End If
+
     ' --- NAV metrics over last 3 months (from Daily_Snapshot)
     UpdateNav3M_MetricsAndChart wsP, dayCutoffUTC7, totalNAV
     ' --- Allocation metrics (%Coin, %BTC, %Alt.*, Num Alt.* coins)
     UpdateAllocationMetrics wsP, coinVals, totalHoldValue, totalNAV
+
+    ' --- Now write %NAV weights (after NAV known) and sort by %NAV desc
+    If portCols("%NAV") > 0 Then
+        If totalNAV > mod_config.EPS_CLOSE Then
+            For Each k In openRowVals.Keys
+                wsP.Cells(CLng(k), portCols("%NAV")).Value = CDbl(openRowVals(k)) / totalNAV
+            Next k
+        Else
+            For Each k In openRowVals.Keys
+                wsP.Cells(CLng(k), portCols("%NAV")).Value = 0#
+            Next k
+        End If
+        ' Fill blanks to zero for consistent sorting
+        Dim rFill As Long
+        For rFill = OUT_START To rowOut - 1
+            If Not IsNumeric(wsP.Cells(rFill, portCols("%NAV")).Value) Then
+                wsP.Cells(rFill, portCols("%NAV")).Value = 0#
+            End If
+        Next rFill
+        ' Sort entire block by %NAV desc
+        Dim sortRange As Range, keyRange As Range
+        Set sortRange = wsP.Range(wsP.Cells(OUT_START, 1), wsP.Cells(rowOut - 1, MaxCol(portCols)))
+        Set keyRange = wsP.Range(wsP.Cells(OUT_START, portCols("%NAV")), wsP.Cells(rowOut - 1, portCols("%NAV")))
+        On Error Resume Next
+        sortRange.Sort Key1:=keyRange, Order1:=xlDescending, Header:=xlNo
+        On Error GoTo 0
+    End If
 
     ' --- Update charts
     ' Cash vs Coin (keep chart type)
@@ -733,12 +779,12 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     Dim yMin As Double, yMax As Double, unit As Double
     unit = 1000#
     If navATL > 0 Then
-        yMin = navATL * 0.9   ' 10% margin below
+        yMin = navATL * 0.95   ' 5% margin below
     Else
         yMin = 0#
     End If
     If navATH > 0 Then
-        yMax = navATH * 1.1   ' 10% margin above
+        yMax = navATH * 1.05   ' 5 margin above
     Else
         yMax = 1#
     End If
@@ -1530,6 +1576,7 @@ Private Function MapPortfolioHeaders(wsP As Worksheet, ByVal headerRow As Long) 
     map("available balance") = RequireAnyOptional(raw, Array("available balance", "balance", "unrealized value", "market value"))
     map("profit") = RequireAnyOptional(raw, Array("profit", "pnl", "p&l", "gain"))
     map("%PnL") = RequireAnyOptional(raw, Array("%pnl", "pnl%", "percent pnl", "% pnl", "roi", "return %", "return pct"))
+    map("%NAV") = RequireAnyOptional(raw, Array("%nav", "nav%", "% of nav", "% nav", "weight", "%weight", "nav weight"))
     map("storage") = RequireAnyOptional(raw, Array("storage", "exchange", "venue", "wallet"))
 
     If Not map.Exists("market price") Then map("market price") = 0
@@ -1537,6 +1584,7 @@ Private Function MapPortfolioHeaders(wsP As Worksheet, ByVal headerRow As Long) 
     If Not map.Exists("profit") Then map("profit") = 0
     If Not map.Exists("%PnL") Then map("%PnL") = 0
     If Not map.Exists("storage") Then map("storage") = 0
+    If Not map.Exists("%NAV") Then map("%NAV") = 0
 
     Set MapPortfolioHeaders = map
 End Function
@@ -1656,6 +1704,8 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
     ws.Range(ws.Cells(outStart, portCols("avg sell price")), ws.Cells(lastRow, portCols("avg sell price"))).NumberFormat = mod_config.PRICE_FMT
     If portCols("%PnL") > 0 Then _
         ws.Range(ws.Cells(outStart, portCols("%PnL")), ws.Cells(lastRow, portCols("%PnL"))).NumberFormat = mod_config.PCT_FMT
+    If portCols("%NAV") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("%NAV")), ws.Cells(lastRow, portCols("%NAV"))).NumberFormat = mod_config.PCT_FMT
 
     ws.Range(ws.Cells(outStart, portCols("Open date")), ws.Cells(lastRow, portCols("Open date"))).NumberFormat = mod_config.DATE_FMT
     ws.Range(ws.Cells(outStart, portCols("Close date")), ws.Cells(lastRow, portCols("Close date"))).NumberFormat = mod_config.DATE_FMT

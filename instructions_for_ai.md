@@ -39,8 +39,9 @@ When responding to user requests, follow these guidelines:
   3) Stablecoins (USDT/USDC/BUSD/FDUSD/TUSD) price = 1.
 - Charts on Position (maintained by `Update_All_Position`):
   - `Cash vs Coin` (pie)
-  - `Portfolio_Category_Daily` (pie by group: BTC, Alt.TOP, Alt.MID, Alt.LOW)
+  - `Coin Category` (pie by group: BTC, Alt.TOP, Alt.MID, Alt.LOW)
   - `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` (pie per coin within each Alt group)
+  - `NAV 3M` (line): last 3 months of NAV; legend hidden. When created, set X axis to Date axis (BaseUnit Days) with 3/14/12 format. Y‑axis is scaled each run with a 10% margin around 3‑month min/max, rounded to thousands.
 - Charts on Dashboard (maintained by `Update_Dashboard`): `NAV`, `Deposit`, `PnL`, `Cash vs NAV`, `Portfolio_Category`, `Portfolio_Alt.TOP`, `Portfolio_Alt.MID`, `Portfolio_Alt.LOW`.
 - Removed/Deprecated: `Portfolio_Coin` (aka `CHART_PORTFOLIO2`) is no longer used — do not reintroduce.
 
@@ -51,6 +52,15 @@ When responding to user requests, follow these guidelines:
 - Rounding: totals are integer money; prices use `ROUND_PRICE_DECIMALS`. Keep number formats from `mod_config` (`MONEY_FMT`, `PRICE_FMT`, `PCT_FMT`).
 - HTTP: use `MSXML2.XMLHTTP` (or `XMLHTTP.6.0` if you add a fallback). Keep requests simple; no external libraries.
 - Error handling: follow the pattern `On Error GoTo Fail` + a `Clean:`/`Fail:` block. Avoid excessive `MsgBox`; prefer a single summary message at end of macro.
+
+## Position Sheet Cells & Metrics
+- Totals (current default addresses):
+  - `CELL_CASH=B7`, `CELL_COIN=B8`, `CELL_NAV=B9`, `CELL_NAV_ATH=B10`, `CELL_NAV_ATL=B11`, `CELL_NAV_DD=B12`, `CELL_SUM_DEPOSIT=B13`, `CELL_SUM_WITHDRAW=B14`, `CELL_TOTAL_PNL=B15`.
+- Allocation metrics (percent cells use `PCT_FMT`):
+  - `CELL_PCT_COIN=B18`, `CELL_PCT_BTC=B19`, `CELL_PCT_ALT_TOP=B20`, `CELL_NUM_ALT_TOP=B21`, `CELL_PCT_ALT_MID=B22`, `CELL_NUM_ALT_MID=B23`, `CELL_PCT_ALT_LOW=B24`, `CELL_NUM_ALT_LOW=B25`.
+- `%NAV` column: weight per open row = Available Balance / total NAV (closed rows 0%). Map header aliases include `%nav`, `nav%`, `% of nav`, `weight`, etc.
+- Percent formatting: `PCT_FMT="0.0%"`; allocation metrics respect `ROUND_PCT_DECIMALS`.
+- Column widths: `AUTOFIT_POSITION_COLUMNS=False` to preserve user widths.
 
 ## File & Naming
 - Modules are named `mod_*`. Add new helpers only when necessary and keep them small.

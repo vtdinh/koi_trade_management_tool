@@ -14,13 +14,22 @@ Core macros
 ## Sheets & Key Cells
 ### Position (SHEET_PORTFOLIO)
 - B3 (CELL_CUTOFF): Cutoff datetime in UTC+7. If only a date is provided, treat as end-of-day 23:59:59 (UTC+7).
-- Dashboard cells (configurable):
-  - CELL_CASH = B5 (Cash)
-  - CELL_COIN = B6 (Coin market value of open holdings)
-  - CELL_NAV  = B7 (NAV = Cash + Coin)
-  - CELL_SUM_DEPOSIT  = B8 (Total deposit to cutoff)
-  - CELL_SUM_WITHDRAW = B9 (Total withdraw to cutoff)
-  - CELL_TOTAL_PNL    = B10 (Total profit to cutoff)
+- Totals (cells configurable; current layout):
+  - CELL_CASH = B7 (Cash)
+  - CELL_COIN = B8 (Coin market value of open holdings)
+  - CELL_NAV  = B9 (NAV = Cash + Coin)
+  - CELL_NAV_ATH = B10 (3‑month NAV high)
+  - CELL_NAV_ATL = B11 (3‑month NAV low)
+  - CELL_NAV_DD  = B12 (drawdown vs ATH at cutoff)
+  - CELL_SUM_DEPOSIT  = B13 (Total deposit to cutoff)
+  - CELL_SUM_WITHDRAW = B14 (Total withdraw to cutoff)
+  - CELL_TOTAL_PNL    = B15 (Total profit to cutoff)
+- Allocation metrics (percent cells use PCT_FMT):
+  - CELL_PCT_COIN = B18 (%Coin = Coin/NAV)
+  - CELL_PCT_BTC  = B19 (%BTC of Coin)
+  - CELL_PCT_ALT_TOP = B20, CELL_NUM_ALT_TOP = B21
+  - CELL_PCT_ALT_MID = B22, CELL_NUM_ALT_MID = B23
+  - CELL_PCT_ALT_LOW = B24, CELL_NUM_ALT_LOW = B25
 
 ### Order_History (SHEET_ORDERS)
 - Default header row = 2 (auto-detection supported).
@@ -97,7 +106,8 @@ Core macros
    - DEPOSIT/WITHDRAW: affect only cash aggregates.
 3) Flush open sessions; compute AvailableQty.
 4) Pre-fetch market prices for Open coins; stablecoins = 1.
-5) Write sessions to Position table: Open/Closed, Qty, Cost, Proceeds, Avg, Profit, %PnL, Storage; color PnL (green/red).
+5) Write sessions to Position table: Open/Closed, Qty, Cost, Proceeds, Avg, Profit, %PnL, %NAV (open rows), Storage; color PnL (green/red).
+   - %NAV = Available Balance (open row) / total NAV (closed rows 0%).
 6) Formats: dates yyyy-mm-dd; %PnL "0.00%"; money #,##0; price #,##0.00; AutoFit; clear trailing rows.
 
 ## Dashboard Metrics
@@ -120,6 +130,7 @@ Core macros
   - Alt.TOP: pie by coin within Alt.TOP
   - Alt.MID: pie by coin within Alt.MID
   - Alt.LOW: pie by coin within Alt.LOW
+  - NAV 3M (line): last 3 months of NAV, legend hidden; date axis set when created; Y-axis scaled each run with 10% margins and thousand rounding.
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
@@ -129,7 +140,9 @@ Core macros
   - SHEET_ORDERS    = "Order_History"
   - SHEET_SNAPSHOT  = "Daily_Snapshot"
   - SHEET_CATEGORY  = "Categoty"  (fallback to "Catagory" and "Category" accepted)
-  - CHART_PORTFOLIO1 = "Portfolio_Category_Daily"
+  - CHART_PORTFOLIO1 = "Coin Category"
+  - AUTOFIT_POSITION_COLUMNS = False (keep user column widths)
+  - PCT_FMT = "0.0%" (one decimal for percents)
 
 ### Formatting Alignment
 - Position sheet number formats:
@@ -149,6 +162,9 @@ Core macros
   - Position charts: added three daily pies — `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` — showing per-coin breakdowns within Alt groups.
   - Removed per-coin pie `Portfolio_Coin` from Position.
   - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.
+  - Added `NAV 3M` chart (line) with date axis; legend hidden; auto‑scaled Y axis with 10% margin around 3M min/max, rounded to thousands.
+  - Added NAV metrics cells: NAV ATH/ATL/Drawdown (3M window) and allocation metrics (%Coin, %BTC, %Alt.*, counts).
+  - Added `%NAV` column calculation for open rows (Available Balance / total NAV).
 - v2.6.2:
   - Position: renamed charts — `Portfolio1` → `Portfolio_Category_Daily`; `Portfolio2` → `Portfolio_Coin`.
   - Position: quantity display format for “Buy Qty”, “Sell Qty”, and “Available Qty” now syncs with the `Order_History!Qty` column format.
