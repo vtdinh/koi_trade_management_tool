@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-13T08:15:00Z
+' Last Modified (UTC): 2025-09-29T15:30:00Z
 
 ' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -214,13 +214,9 @@ Public Sub Update_All_Position()
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
-            ' 1b) Binance quote fallback to USDC/BUSD if USDT primary failed
-            If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
-                px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
-            End If
             ' 2) If Binance unavailable, try the exchange from Order_History (storage)
-            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 And LCase$(exName) <> "binance" Then
-                px = GetRealtimePriceByExchange(exName, CStr(coin))
+            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 Then
+                px = GetExchangePriceByCutoff(exName, CStr(coin), dayCutoffUTC7, todayUTC7)
             End If
             ' 3) Stablecoin fixed price
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(CStr(coin)) Then px = 1#
@@ -534,11 +530,8 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
-            If (Not IsNumeric(px) Or px <= 0) And Right$(sym, 4) = "USDT" Then
-                px = GetFallbackRealtimeOrCloseUTC(sym, dayCutoffUTC7, todayUTC7)
-            End If
-            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 And LCase$(exName) <> "binance" Then
-                px = GetRealtimePriceByExchange(exName, coin)
+            If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 Then
+                px = GetExchangePriceByCutoff(exName, coin, dayCutoffUTC7, todayUTC7)
             End If
             ' Stablecoin -> 1
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(coin) Then px = 1#
@@ -1939,23 +1932,6 @@ Fail:
 End Function
 
 ' Fallback for USDT->USDC/BUSD using same UTC-day logic
-Private Function GetFallbackRealtimeOrCloseUTC(ByVal usdtSym As String, ByVal dayCutoffUTC7 As Date, ByVal todayUTC7 As Date) As Variant
-    Dim base As String: base = Left$(usdtSym, Len(usdtSym) - 4)
-    Dim px As Variant, qv As Variant, alt As String
-
-    For Each qv In Array("USDC", "BUSD")
-        alt = base & CStr(qv)
-        If dayCutoffUTC7 < todayUTC7 Then
-            Dim dayUTC As Date: dayUTC = dayCutoffUTC7   ' interpret as UTC day
-            px = GetBinanceDailyCloseUTC(alt, dayUTC)
-        Else
-            px = GetBinanceRealtimePrice(alt)
-        End If
-        If IsNumeric(px) And px > 0 Then GetFallbackRealtimeOrCloseUTC = px: Exit Function
-    Next qv
-
-    GetFallbackRealtimeOrCloseUTC = Empty
-End Function
 
 
 ' ========================= CUTOFF PARSER HELPERS =============================
@@ -2275,24 +2251,93 @@ End Sub
 ' ============================= SNAPSHOT HELPER ===============================
  ' Removed unused SafeRead helper (no references)
 
-Private Function GetRealtimePriceByExchange(ByVal exchangeName As String, ByVal coin As String) As Variant
+
+Private Function GetExchangePriceByCutoff(ByVal exchangeName As String, ByVal coin As String, ByVal dayCutoffUTC As Date, ByVal todayUTC As Date) As Variant
     Dim ex As String: ex = LCase$(Trim$(exchangeName))
-    If ex = "" Or ex = "binance" Then
-        GetRealtimePriceByExchange = GetBinanceRealtimePrice(MapCoinToBinanceSymbol(coin))
-        Exit Function
-    End If
-    If ex = "okx" Or ex = "okex" Then
-        GetRealtimePriceByExchange = GetOkxRealtimePrice(MapCoinToOkxInstId(coin))
-        Exit Function
-    End If
-    If ex = "bybit" Then
-        GetRealtimePriceByExchange = GetBybitRealtimePrice(MapCoinToBybitSymbol(coin))
-        Exit Function
-    End If
-    ' Unknown exchange -> try Binance
-    GetRealtimePriceByExchange = GetBinanceRealtimePrice(MapCoinToBinanceSymbol(coin))
+    Dim baseSymbol As String: baseSymbol = MapCoinToBinanceSymbol(coin)
+
+    Select Case ex
+        Case "", "binance"
+            If dayCutoffUTC < todayUTC Then
+                GetExchangePriceByCutoff = GetBinanceDailyCloseUTC(baseSymbol, dayCutoffUTC)
+            Else
+                GetExchangePriceByCutoff = GetBinanceRealtimePrice(baseSymbol)
+            End If
+        Case "okx", "okex"
+            Dim instId As String: instId = MapCoinToOkxInstId(baseSymbol)
+            If dayCutoffUTC < todayUTC Then
+                GetExchangePriceByCutoff = GetOkxDailyCloseUTC(instId, dayCutoffUTC)
+            Else
+                GetExchangePriceByCutoff = GetOkxRealtimePrice(instId)
+            End If
+        Case "bybit"
+            If dayCutoffUTC < todayUTC Then
+                GetExchangePriceByCutoff = GetBybitDailyCloseUTC(baseSymbol, dayCutoffUTC)
+            Else
+                GetExchangePriceByCutoff = GetBybitRealtimePrice(baseSymbol)
+            End If
+        Case Else
+            If dayCutoffUTC < todayUTC Then
+                GetExchangePriceByCutoff = GetBinanceDailyCloseUTC(baseSymbol, dayCutoffUTC)
+            Else
+                GetExchangePriceByCutoff = GetBinanceRealtimePrice(baseSymbol)
+            End If
+    End Select
 End Function
 
+Private Function GetOkxDailyCloseUTC(ByVal instId As String, ByVal dayUTC As Date) As Variant
+    On Error GoTo Fail
+    Dim url As String: url = "https://www.okx.com/api/v5/market/history-candles?instId=" & instId & "&bar=1D&limit=120"
+    Dim s As String: s = HttpGet(url)
+    If Len(s) = 0 Then GoTo Fail
+
+    Dim target As String: target = """" & MsSinceEpochUTC(DateSerial(Year(dayUTC), Month(dayUTC), Day(dayUTC))) & """"
+    Dim idx As Long: idx = InStr(1, s, target, vbBinaryCompare)
+    If idx = 0 Then GoTo Fail
+
+    Dim startArr As Long: startArr = InStrRev(s, "[", idx, vbBinaryCompare)
+    Dim endArr As Long: endArr = InStr(idx, s, "]", vbBinaryCompare)
+    If startArr = 0 Or endArr = 0 Then GoTo Fail
+
+    Dim arrText As String: arrText = Mid$(s, startArr + 1, endArr - startArr - 1)
+    Dim parts() As String: parts = Split(arrText, ",")
+    If UBound(parts) < 4 Then GoTo Fail
+
+    Dim closeStr As String: closeStr = Replace$(parts(4), """", "")
+    If IsNumeric(closeStr) Then
+        GetOkxDailyCloseUTC = CDbl(closeStr)
+        Exit Function
+    End If
+Fail:
+    GetOkxDailyCloseUTC = Empty
+End Function
+
+Private Function GetBybitDailyCloseUTC(ByVal symbol As String, ByVal dayUTC As Date) As Variant
+    On Error GoTo Fail
+    Dim url As String: url = "https://api.bybit.com/v5/market/kline?category=spot&symbol=" & symbol & "&interval=D&limit=200"
+    Dim s As String: s = HttpGet(url)
+    If Len(s) = 0 Then GoTo Fail
+
+    Dim target As String: target = """" & MsSinceEpochUTC(DateSerial(Year(dayUTC), Month(dayUTC), Day(dayUTC))) & """"
+    Dim idx As Long: idx = InStr(1, s, target, vbBinaryCompare)
+    If idx = 0 Then GoTo Fail
+
+    Dim startArr As Long: startArr = InStrRev(s, "[", idx, vbBinaryCompare)
+    Dim endArr As Long: endArr = InStr(idx, s, "]", vbBinaryCompare)
+    If startArr = 0 Or endArr = 0 Then GoTo Fail
+
+    Dim arrText As String: arrText = Mid$(s, startArr + 1, endArr - startArr - 1)
+    Dim parts() As String: parts = Split(arrText, ",")
+    If UBound(parts) < 4 Then GoTo Fail
+
+    Dim closeStr As String: closeStr = Replace$(parts(4), """", "")
+    If IsNumeric(closeStr) Then
+        GetBybitDailyCloseUTC = CDbl(closeStr)
+        Exit Function
+    End If
+Fail:
+    GetBybitDailyCloseUTC = Empty
+End Function
 Private Function MapCoinToOkxInstId(ByVal coin As String) As String
     Dim c As String: c = UCase$(Trim$(coin))
     c = Replace$(c, "/", "")

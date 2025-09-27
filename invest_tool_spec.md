@@ -1,4 +1,4 @@
-# KOI Trading Portfolio Workbook Spec (v2.7.0)
+﻿# KOI Trading Portfolio Workbook Spec (v2.7.0)
 Generated: 2025-09-10
 
 ## Overview
@@ -13,7 +13,7 @@ Core macros
 
 ## Sheets & Key Cells
 ### Position (SHEET_PORTFOLIO)
-- B3 (CELL_CUTOFF): Cutoff datetime in UTC+7. If only a date is provided, treat as end-of-day 23:59:59 (UTC+7).
+- B3 (CELL_CUTOFF): Cutoff datetime in UTC+0. If only a date is provided, treat as end-of-day 23:59:59 (UTC+0).
 - Totals (cells configurable; current layout):
   - CELL_CASH = B7 (Cash)
   - CELL_COIN = B8 (Coin market value of open holdings)
@@ -33,7 +33,7 @@ Core macros
 
 ### Order_History (SHEET_ORDERS)
 - Default header row = 2 (auto-detection supported).
-- Timestamps are UTC-4; workbook logic uses UTC+7 (+11h).
+- Timestamps are already UTC+0; workbook logic uses them directly.
 - Supported columns (case/spacing tolerant):
   - Required: Date | Type | Coin | Qty
   - Optional: Price | Fee | Exchange | Total
@@ -86,8 +86,8 @@ Core macros
     - Group matching is punctuation/spacing tolerant (e.g., "Alt MID" == "Alt.MID")
 
 ## Time & Cutoff Rules
-- Order_History timestamps = UTC-4; converted to UTC+7 via +11h.
-- Cutoff read from Position!B3 (UTC+7). If date-only, treat as end-of-day 23:59:59.
+- Order_History timestamps = UTC+0; no additional conversion applied.
+- Cutoff read from Position!B3 (UTC+0). If date-only, treat as end-of-day 23:59:59.
 - Pricing source & priority:
   - First try Binance:
     - If cutoff < today: Binance D1 close (UTC-aligned candle close)
@@ -100,7 +100,7 @@ Core macros
 
 ## Position Building (Update_All_Position)
 1) Map headers and clear old output.
-2) Iterate orders <= cutoff (UTC+7), maintain per-coin session state:
+2) Iterate orders <= cutoff (UTC+0), maintain per-coin session state:
    - BUY: extend session; Cost += Qty*Price + Fee; BuyQty += Qty.
    - SELL: extend session; SellProceeds += Qty*Price - Fee; SellQty += Qty; close when AvailableQty ~ 0.
    - DEPOSIT/WITHDRAW: affect only cash aggregates.
@@ -166,7 +166,7 @@ Core macros
 
 ## Version History
 - v2.7.0:
-  - Pricing priority: Binance first (D1 close/realtime with USDC/BUSD fallback), then Exchange-specific realtime (OKX/Bybit) when Binance lacks the symbol.
+  - Pricing priority: Binance first (D1 close/realtime), then Exchange-specific pricing (OKX/Bybit) using\r\n    daily close for past cutoffs and realtime for today.
   - Position charts: added three daily pies — `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` — showing per-coin breakdowns within Alt groups.
   - Removed per-coin pie `Portfolio_Coin` from Position.
   - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.

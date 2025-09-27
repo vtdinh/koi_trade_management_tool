@@ -1,3 +1,31 @@
 {
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup": true,
+  "chat.agent.enabled": true,
+  "chat.tools.autoApprove": true,
+  "chat.agent.maxRequests": 200,
+
+  // ✅ Cho phép các lệnh đọc/an toàn chạy tự động
+  "chat.tools.shell.allowList": [
+    "powershell.exe .*Get-Content.*",
+    "powershell.exe .*Convert-Path.*",
+    "powershell.exe .*Copy-Item .*\\.bak_.*",   // chỉ cho backup
+    "cmd.exe .*type .*",
+    "cmd.exe .*dir .*"
+  ],
+
+  // ❌ Chặn lệnh ghi/xoá (sẽ buộc hiện popup nếu agent cố chạy)
+  "chat.tools.shell.denyList": [
+    "WriteAllText",
+    "Set-Content",
+    "Add-Content",
+    "Remove-Item",
+    "Rename-Item",
+    "rm",
+    "del",
+    "move"
+  ]
+
+
+
+
 }

@@ -32,7 +32,7 @@ When responding to user requests, follow these guidelines:
 - Keep behavior aligned with the spec file `koi_code_spec_v2_6_0.md` (v2.7.0). If your change affects behavior, update the spec accordingly.
 
 ## Key Rules (Functional)
-- Cutoff: read from `Position!B3` (UTC+7). Date‑only means 23:59:59 end‑of‑day.
+- Cutoff: read from `Position!B3` (UTC+0). Date‑only means 23:59:59 end‑of‑day.
 - Pricing priority:
   1) Binance first — D1 close for past days, realtime for today; fallback quote USDT→USDC→BUSD.
   2) If Binance lacks the symbol, use the row/session “Exchange/Storage” (OKX or Bybit) realtime.

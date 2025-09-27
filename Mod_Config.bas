@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-13T08:00:00Z
+' Last Modified (UTC): 2025-09-29T13:30:00Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -31,12 +31,12 @@ Public Const SHEET_DASHBOARD As String = "Dashboard"
 Public Const CHART_PORTFOLIO1 As String = "Coin Category"
 
 ' Key cells on Position sheet
-Public Const CELL_CUTOFF       As String = "B3"   ' cutoff datetime (UTC+7)
+Public Const CELL_CUTOFF       As String = "B3"   ' cutoff datetime (UTC+0)
 Public Const CELL_CASH         As String = "B7"
 Public Const CELL_COIN         As String = "B8"
 Public Const CELL_NAV          As String = "B9"
-Public Const CELL_NAV_ATH      As String = "B10"  ' All‑time high of NAV
-Public Const CELL_NAV_ATL      As String = "B11"  ' All‑time low of NAV
+Public Const CELL_NAV_ATH      As String = "B10"  ' All-time high of NAV
+Public Const CELL_NAV_ATL      As String = "B11"  ' All-time low of NAV
 Public Const CELL_NAV_DD       As String = "B12"  ' NAV drawdown text/value
 Public Const CELL_SUM_DEPOSIT  As String = "B13"
 Public Const CELL_SUM_WITHDRAW As String = "B14"
@@ -48,8 +48,8 @@ Public Const CELL_NAV_ACTION   As String = "D9"   ' Warning/Action cell
 Public Const CAPITAL_RULE_DIFF_THRESHOLD_PCT As Double = 0.005  ' 0.5%
 
 ' NAV drawdown behavior
-Public Const NAV_DD_USE_TRUNCATED As Boolean = True            ' compute drawdown using truncated (0‑decimal) NAVs
-Public Const NAV_DD_TOLERANCE_PCT As Double = 0.001            ' <=0.1% → treat as 0%
+Public Const NAV_DD_USE_TRUNCATED As Boolean = True            ' compute drawdown using truncated (0-decimal) NAVs
+Public Const NAV_DD_TOLERANCE_PCT As Double = 0.001            ' <=0.1% -> treat as 0%
 
 ' NAV drawdown threshold & action (Position sheet)
 Public Const CELL_NAV_DD_LIMIT   As String = "C12"  ' threshold value (e.g., 30% as 0.30)
@@ -67,7 +67,7 @@ Public Const CELL_NUM_ALT_LOW  As String = "B25"  ' Number of Alt.LOW coins
 
 ' Orders table defaults
 Public Const ORDERS_HEADER_ROW_DEFAULT As Long = 2
-Public Const ORDERS_TZ_OFFSET_HOURS    As Long = 11   ' UTC-4 -> UTC+7 = +11h
+Public Const ORDERS_TZ_OFFSET_HOURS    As Long = 0    ' Order timestamps already in UTC+0
 
 ' Behavior flags
 Public Const CLEAR_MARKET_PRICE As Boolean = True
