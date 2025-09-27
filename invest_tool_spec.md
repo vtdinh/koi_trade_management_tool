@@ -1,4 +1,4 @@
-Ôªø# KOI Trading Portfolio Workbook Spec (v2.7.0)
+# KOI Trading Portfolio Workbook Spec (v2.7.0)
 Generated: 2025-09-10
 
 ## Overview
@@ -18,8 +18,8 @@ Core macros
   - CELL_CASH = B7 (Cash)
   - CELL_COIN = B8 (Coin market value of open holdings)
   - CELL_NAV  = B9 (NAV = Cash + Coin)
-  - CELL_NAV_ATH = B10 (3‚Äëmonth NAV high)
-  - CELL_NAV_ATL = B11 (3‚Äëmonth NAV low)
+  - CELL_NAV_ATH = B10 (3-month NAV high)
+  - CELL_NAV_ATL = B11 (3-month NAV low)
   - CELL_NAV_DD  = B12 (drawdown vs ATH at cutoff)
   - CELL_SUM_DEPOSIT  = B13 (Total deposit to cutoff)
   - CELL_SUM_WITHDRAW = B14 (Total withdraw to cutoff)
@@ -77,12 +77,12 @@ Core macros
     - Legend enabled; no drawdown annotation
   - Cash vs NAV (ChartObject name: "Cash vs NAV")
     - Series: Date (A) vs Cash/NAV ratio (percent)
-    - Value axis as percent (e.g., 0‚Äì100%)
+    - Value axis as percent (e.g., 0ñ100%)
   - Portfolio_Category (ChartObject name: "Portfolio_Category")
     - Preferred computation: parse `Holdings` and map coins to groups using Catagory sheet; stack amounts per group (BTC, Alt.TOP, Alt.MID, Alt.LOW, then Others)
     - Fallback: if no `Holdings` column, use snapshot group columns (H..)
   - Portfolio_Alt.TOP / Portfolio_Alt.MID / Portfolio_Alt.LOW
-    - Per‚Äëcoin stacked amounts within each Alt group
+    - Per-coin stacked amounts within each Alt group
     - Group matching is punctuation/spacing tolerant (e.g., "Alt MID" == "Alt.MID")
 
 ## Time & Cutoff Rules
@@ -93,9 +93,9 @@ Core macros
     - If cutoff < today: Binance D1 close (UTC-aligned candle close)
     - If cutoff = today: Binance realtime ticker
     - Fallback quote: SYMBOLUSDT -> SYMBOLUSDC -> SYMBOLBUSD
-  - If Binance has no price/symbol: use Exchange from Order_History (storage) for realtime price
-    - Supported: OKX, Bybit (spot ticker realtime)
-    - For historical dates on non-Binance, realtime is used as a safe fallback
+  - If Binance lacks the symbol or returns no price: use the Exchange from Order_History (storage).
+    - For historical cutoffs the exchange fetch uses the daily close; for the current day it uses realtime.
+    - If neither source returns a price, the macro stops with "Can not fetch the ""coin"" price."
   - Stablecoins (USDT/USDC/BUSD/FDUSD/TUSD) = 1.
 
 ## Position Building (Update_All_Position)
@@ -119,8 +119,8 @@ Core macros
 - Total profit   = NAV - (Total deposit - Total withdraw)
  
 ## NAV Sanity Check
-- The workbook optionally compares calculated NAV (Position `CELL_NAV=B9`) with a manual ‚ÄúReal NAV‚Äù (Position `CELL_NAV_REAL=C9`).
-- If the relative difference ‚â• `CAPITAL_RULE_DIFF_THRESHOLD_PCT` (default 0.5%), it writes "Check NAV !" to `CELL_NAV_ACTION=D9` in red/bold.
+- The workbook optionally compares calculated NAV (Position `CELL_NAV=B9`) with a manual ìReal NAVî (Position `CELL_NAV_REAL=C9`).
+- If the relative difference = `CAPITAL_RULE_DIFF_THRESHOLD_PCT` (default 0.5%), it writes "Check NAV !" to `CELL_NAV_ACTION=D9` in red/bold.
 - To disable, clear `CELL_NAV_REAL`, increase the threshold, or remove the call to `checkCapitalRuleViolation` in `Update_All_Position`.
 
 ## Holdings Value
@@ -135,7 +135,7 @@ Core macros
   - Alt.TOP: pie by coin within Alt.TOP
   - Alt.MID: pie by coin within Alt.MID
   - Alt.LOW: pie by coin within Alt.LOW
-  - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~10% margins around 3‚Äëmonth min/max, rounded to thousands.
+  - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~10% margins around 3-month min/max, rounded to thousands.
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 
@@ -154,7 +154,7 @@ Core macros
 
 ### Formatting Alignment
 - Position sheet number formats:
-  - The columns ‚ÄúBuy Qty‚Äù, ‚ÄúSell Qty‚Äù, and ‚ÄúAvailable Qty‚Äù mirror the NumberFormat of the ‚ÄúQty‚Äù column in `Order_History` (first numeric cell below header). If unavailable, fall back to the column format or a default based on `ROUND_QTY_DECIMALS`.
+  - The columns ìBuy Qtyî, ìSell Qtyî, and ìAvailable Qtyî mirror the NumberFormat of the ìQtyî column in `Order_History` (first numeric cell below header). If unavailable, fall back to the column format or a default based on `ROUND_QTY_DECIMALS`.
   - SHEET_DASHBOARD = "Dashboard"
 - Numbers & formats: DATE_FMT, MONEY_FMT, PRICE_FMT, PCT_FMT, SNAPSHOT_DATE_FMT, SNAPSHOT_NUMBER_FMT
 - Tolerances: EPS_ZERO, EPS_CLOSE
@@ -167,15 +167,15 @@ Core macros
 ## Version History
 - v2.7.0:
   - Pricing priority: Binance first (D1 close/realtime), then Exchange-specific pricing (OKX/Bybit) using\r\n    daily close for past cutoffs and realtime for today.
-  - Position charts: added three daily pies ‚Äî `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` ‚Äî showing per-coin breakdowns within Alt groups.
+  - Position charts: added three daily pies ó `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` ó showing per-coin breakdowns within Alt groups.
   - Removed per-coin pie `Portfolio_Coin` from Position.
   - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.
-  - Added `NAV 3M` chart (line) with date axis; legend hidden; auto‚Äëscaled Y axis with 10% margin around 3M min/max, rounded to thousands.
+  - Added `NAV 3M` chart (line) with date axis; legend hidden; auto-scaled Y axis with 10% margin around 3M min/max, rounded to thousands.
   - Added NAV metrics cells: NAV ATH/ATL/Drawdown (3M window) and allocation metrics (%Coin, %BTC, %Alt.*, counts).
   - Added `%NAV` column calculation for open rows (Available Balance / total NAV).
 - v2.6.2:
-  - Position: renamed charts ‚Äî `Portfolio1` ‚Üí `Portfolio_Category_Daily`; `Portfolio2` ‚Üí `Portfolio_Coin`.
-  - Position: quantity display format for ‚ÄúBuy Qty‚Äù, ‚ÄúSell Qty‚Äù, and ‚ÄúAvailable Qty‚Äù now syncs with the `Order_History!Qty` column format.
+  - Position: renamed charts ó `Portfolio1` ? `Portfolio_Category_Daily`; `Portfolio2` ? `Portfolio_Coin`.
+  - Position: quantity display format for ìBuy Qtyî, ìSell Qtyî, and ìAvailable Qtyî now syncs with the `Order_History!Qty` column format.
 - v2.6.1:
   - Default Category sheet renamed to "Catagory" (intentional spelling); code accepts both "Catagory" and "Category".
   - Dashboard: added charts Cash vs NAV and Portfolio_Category (replaces legacy Portfolio_Group).
@@ -185,7 +185,7 @@ Core macros
   - Kept drawdown annotation only on NAV; PnL drawdown removed.
 - v2.6.0:
   - New Update_Dashboard with three charts: NAV (with drawdown annotation), PnL, and combined Deposit & Withdraw.
-  - Current drawdown = 0 when latest NAV equals all‚Äëtime high (tolerant by EPS_CLOSE).
+  - Current drawdown = 0 when latest NAV equals all-time high (tolerant by EPS_CLOSE).
   - PnL X axis always at bottom.
   - Added SHEET_DASHBOARD and NAV_MDD_* config; default SHEET_CATEGORY older spec used "Category".
 - v2.5.0: Added Update_All_Snapshot (bulk daily backfill), standardized Daily_Snapshot A:L layout with group totals + Holdings string, chart reset to "No holdings" when empty, single-message run mode.

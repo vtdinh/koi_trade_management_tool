@@ -87,6 +87,8 @@ Public Sub Update_All_Position()
     Dim stateRun As Object: Set stateRun = CreateObject("Scripting.Dictionary"): stateRun.CompareMode = vbTextCompare
     Dim stateSess As Object: Set stateSess = CreateObject("Scripting.Dictionary"): stateSess.CompareMode = vbTextCompare
 
+    Dim priceErrMsg As String
+
     Dim totalDeposit As Double, totalWithdraw As Double, totalBuy As Double, totalSell As Double
     totalDeposit = 0#: totalWithdraw = 0#: totalBuy = 0#: totalSell = 0#
 
@@ -220,7 +222,12 @@ Public Sub Update_All_Position()
             End If
             ' 3) Stablecoin fixed price
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(CStr(coin)) Then px = 1#
-            If IsNumeric(px) And px > 0 Then priceMap(coin) = CDbl(px)
+            If IsNumeric(px) And px > 0 Then
+                priceMap(coin) = CDbl(px)
+            Else
+                priceErrMsg = "Can not fetch the """ & CStr(coin) & """ price."
+                GoTo PriceFail
+            End If
         Next coin
     End If
 
@@ -434,7 +441,7 @@ Public Sub Update_All_Position()
         On Error GoTo 0
     End If
 
-    ' --- Portfolio rule checks (limits in column C → actions in column D)
+    ' --- Portfolio rule checks (limits in column C ???????? actions in column D)
     On Error Resume Next
     CheckPortfolioRuleViolations wsP
     On Error GoTo 0
@@ -454,8 +461,18 @@ Public Sub Update_All_Position()
 
     SafeFormat wsP, portCols, rowOut - 1, hdrP, OUT_START
     If Len(statusMsg) = 0 Then statusMsg = "Positions, dashboard, and charts updated."
+    GoTo AfterPriceCheck
 
-    ' Capital rule check – write warning if NAV diff within threshold per config
+PriceFail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    If Len(priceErrMsg) > 0 Then
+        MsgBox priceErrMsg, vbExclamation
+    End If
+    Exit Sub
+
+AfterPriceCheck:
+    ' Capital rule check - write warning if NAV diff within threshold per config
     On Error Resume Next
     checkCapitalRuleViolation
     On Error GoTo 0
@@ -541,6 +558,8 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
                 wsP.Cells(r, portCols("market price")).Value = CDbl(px)
             Else
                 wsP.Cells(r, portCols("market price")).ClearContents
+                priceErrMsg = "Can not fetch the """ & coin & """ price."
+                GoTo PriceFail_MP
             End If
         End If
     Next r
@@ -550,6 +569,16 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     On Error GoTo 0
 
     MsgBox "Market price updated for Open rows (UTC D1 close / realtime).", vbInformation
+    GoTo Clean
+
+PriceFail_MP:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    If Len(priceErrMsg) > 0 Then
+        MsgBox priceErrMsg, vbExclamation
+    End If
+    Exit Sub
+
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
@@ -1092,7 +1121,7 @@ Public Sub Update_Portfolio1_FromCategory()
         ElseIf coinToGroup.Exists(CStr(k)) Then
             grp = CStr(coinToGroup(k))
         Else
-            ' Unmapped coin → skip (do not block chart update/rename)
+            ' Unmapped coin ???????? skip (do not block chart update/rename)
             grp = vbNullString
         End If
         If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + v
@@ -2049,7 +2078,7 @@ Public Sub Take_Daily_Snapshot()
     If Not GetCutoffFromPositionB3(snapDt) Then snapDt = Date
     snapDt = DateValue(snapDt) ' only date
 
-    ' Read dashboard totals from Position (d�ng constants d� khai b�o trong module)
+    ' Read dashboard totals from Position (d??????ng constants d?????? khai b??????o trong module)
     Dim cashVal As Variant, coinVal As Variant, navVal As Variant
     Dim depVal As Variant, wdrVal As Variant, pnlVal As Variant
 
@@ -2186,7 +2215,7 @@ Public Sub Take_Daily_Snapshot()
     wsS.Columns("H:K").NumberFormat = mod_config.SNAPSHOT_NUMBER_FMT
     wsS.Columns("L").NumberFormat = "@"       ' text
 
-    ' ---------- UPSERT: t�m d�ng c� Date = snapDt ----------
+    ' ---------- UPSERT: t??????m d??????ng c?????? Date = snapDt ----------
     Dim lastRow As Long, writeRow As Long, found As Boolean
     lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
     found = False
