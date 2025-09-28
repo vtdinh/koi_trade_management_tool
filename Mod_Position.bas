@@ -1,14 +1,94 @@
-Attribute VB_Name = "mod_position"
+﻿Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-29T15:30:00Z
+' Last Modified (UTC): 2025-09-28T06:35:44Z
 
-' Batch control: suppress message boxes from Update_All_Position when running multi-day updates
+' Batch control: suppress message boxes from Update_Capital_and_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
+Private gSkipAutoSnapshot As Boolean
+Private gPriceFetchFailed As Boolean
+Private gInNav3MBackfill As Boolean
 
 ' Uses global config from mod_config.bas
 Private Const OUTPUT_OFFSET_ROWS As Long = 1
 
-Public Sub Update_All_Position()
+Public Sub Refresh_Daily_Data()
+    On Error GoTo Fail
+
+    Dim wsP As Worksheet
+    Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
+
+    Dim cutoffDt As Date, cutoffDay As Date
+    Dim cutoffValid As Boolean
+    cutoffValid = GetCutoffFromPositionB3(cutoffDt)
+    If cutoffValid Then
+        cutoffDay = DateValue(cutoffDt)
+    Else
+        cutoffDay = Date
+    End If
+
+    Dim originalCutoffValue As Variant
+    If Not wsP Is Nothing Then originalCutoffValue = wsP.Range(mod_config.CELL_CUTOFF).Value
+
+    Dim snapshotActive As Boolean: snapshotActive = False
+    Dim savedSuppress As Boolean, savedSkip As Boolean
+    Dim cutoffResetNeeded As Boolean: cutoffResetNeeded = False
+    Dim errMsg As String
+
+    If Not gInNav3MBackfill Then
+        If Not wsP Is Nothing Then
+            If Backfill3MSnapshots(wsP, cutoffDay) Then GoTo Clean
+        End If
+    End If
+
+    Update_Capital_and_Position
+
+    If cutoffValid And Not wsP Is Nothing Then
+        snapshotActive = True
+        savedSuppress = gSuppressPositionMsg
+        savedSkip = gSkipAutoSnapshot
+        gSuppressPositionMsg = True
+
+        If cutoffDay < Date Then
+            Take_Daily_Snapshot
+        ElseIf cutoffDay = Date Then
+            Dim prevCutoff As Date
+            prevCutoff = DateAdd("d", -1, cutoffDay)
+            If prevCutoff >= DateSerial(1900, 1, 1) Then
+                wsP.Range(mod_config.CELL_CUTOFF).Value = prevCutoff
+                cutoffResetNeeded = True
+                gSkipAutoSnapshot = True
+                Update_Capital_and_Position
+                Take_Daily_Snapshot
+                wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoffValue
+                cutoffResetNeeded = False
+                gSkipAutoSnapshot = savedSkip
+                Update_Capital_and_Position
+            End If
+            Take_Daily_Snapshot
+        End If
+    End If
+
+Clean:
+    If snapshotActive Then
+        gSuppressPositionMsg = savedSuppress
+        gSkipAutoSnapshot = savedSkip
+        If cutoffResetNeeded And Not wsP Is Nothing Then
+            wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoffValue
+        End If
+    End If
+
+    If Len(errMsg) = 0 Then
+        If Not gSuppressPositionMsg Then MsgBox "Capital, portfolio and position are updated.", vbInformation
+    Else
+        MsgBox "Error: " & errMsg, vbExclamation
+    End If
+    Exit Sub
+
+Fail:
+    errMsg = Err.Description
+    Resume Clean
+End Sub
+Private Sub Update_Capital_and_Position()
     On Error GoTo Fail
 
     Dim wsP As Worksheet, wsO As Worksheet
@@ -19,6 +99,18 @@ Public Sub Update_All_Position()
 
     Application.ScreenUpdating = False
     Application.EnableEvents = False
+
+    Dim formShown As Boolean: formShown = False
+    On Error Resume Next
+    With MsgForm
+        .Label1.Caption = "Updating Capital and Position..."
+        .Label1.WordWrap = True
+        .StartUpPosition = 1
+        .Show vbModeless
+        formShown = True
+    End With
+    DoEvents
+    On Error GoTo Fail
 
     Dim statusMsg As String: statusMsg = vbNullString
 
@@ -82,12 +174,44 @@ Public Sub Update_All_Position()
     Dim dayCutoffUTC7 As Date: dayCutoffUTC7 = IIf(cutoffEnabled, DateValue(cutoffDtUTC7), Date)
     Dim todayUTC7 As Date: todayUTC7 = Date
 
+    If cutoffEnabled Then
+        Dim cutoffDateOnly As Date: cutoffDateOnly = dayCutoffUTC7
+        If cutoffDateOnly = todayUTC7 And Not gSkipAutoSnapshot Then
+            Dim prevCutoff As Date: prevCutoff = DateAdd("d", -1, cutoffDateOnly)
+            If prevCutoff >= DateSerial(1900, 1, 1) Then
+                Dim originalCutoffValue As Variant: originalCutoffValue = wsP.Range(mod_config.CELL_CUTOFF).Value
+                Dim savedSuppress As Boolean: savedSuppress = gSuppressPositionMsg
+                gSkipAutoSnapshot = True
+                gSuppressPositionMsg = True
+                wsP.Range(mod_config.CELL_CUTOFF).Value = prevCutoff
+                Update_Capital_and_Position
+                gSuppressPositionMsg = savedSuppress
+                gSkipAutoSnapshot = False
+                wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoffValue
+            End If
+        End If
+    End If
+
+    If Not gInNav3MBackfill Then
+        ' Ensure Daily_Snapshot has no gaps within the NAV 3M lookback; helper reruns update if needed
+        If Backfill3MSnapshots(wsP, dayCutoffUTC7) Then
+            Application.EnableEvents = True
+            Application.ScreenUpdating = True
+            Exit Sub
+        End If
+    End If
+
     ' --- Build sessions & aggregate cash
     Dim sessions As Collection: Set sessions = New Collection
     Dim stateRun As Object: Set stateRun = CreateObject("Scripting.Dictionary"): stateRun.CompareMode = vbTextCompare
     Dim stateSess As Object: Set stateSess = CreateObject("Scripting.Dictionary"): stateSess.CompareMode = vbTextCompare
-
     Dim priceErrMsg As String
+    priceErrMsg = vbNullString
+
+    gPriceFetchFailed = False
+
+
+
 
     Dim totalDeposit As Double, totalWithdraw As Double, totalBuy As Double, totalSell As Double
     totalDeposit = 0#: totalWithdraw = 0#: totalBuy = 0#: totalSell = 0#
@@ -226,6 +350,7 @@ Public Sub Update_All_Position()
                 priceMap(coin) = CDbl(px)
             Else
                 priceErrMsg = "Can not fetch the """ & CStr(coin) & """ price."
+                gPriceFetchFailed = True
                 GoTo PriceFail
             End If
         Next coin
@@ -441,7 +566,7 @@ Public Sub Update_All_Position()
         On Error GoTo 0
     End If
 
-    ' --- Portfolio rule checks (limits in column C ???????? actions in column D)
+    ' --- Portfolio rule checks (limits in column C and actions in column D)
     On Error Resume Next
     CheckPortfolioRuleViolations wsP
     On Error GoTo 0
@@ -469,6 +594,7 @@ PriceFail:
     If Len(priceErrMsg) > 0 Then
         MsgBox priceErrMsg, vbExclamation
     End If
+    gPriceFetchFailed = False
     Exit Sub
 
 AfterPriceCheck:
@@ -476,11 +602,20 @@ AfterPriceCheck:
     On Error Resume Next
     checkCapitalRuleViolation
     On Error GoTo 0
+    If cutoffEnabled Then
+        If gSkipAutoSnapshot Or dayCutoffUTC7 = todayUTC7 Then
+            Dim savedSuppressSnapshot As Boolean
+            savedSuppressSnapshot = gSuppressPositionMsg
+            gSuppressPositionMsg = True
+            Take_Daily_Snapshot
+            gSuppressPositionMsg = savedSuppressSnapshot
+        End If
+    End If
+
 
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
-    If (Not gSuppressPositionMsg) And Len(statusMsg) > 0 Then MsgBox statusMsg, vbInformation
     Exit Sub
 
 Fail:
@@ -529,8 +664,23 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
 
+    Dim formShown As Boolean: formShown = False
+    On Error Resume Next
+    With MsgForm
+        .Label1.Caption = "Updating Capital and Position..."
+        .Label1.WordWrap = True
+        .StartUpPosition = 1
+        .Show vbModeless
+        formShown = True
+    End With
+    DoEvents
+    On Error GoTo Fail
+
     Dim r As Long, coin As String, posVal As String, sym As String
     Dim px As Variant
+    Dim priceErrMsg As String
+    priceErrMsg = vbNullString
+    gPriceFetchFailed = False
 
     For r = OUT_START To lastR
         coin = Trim$(CStr(wsP.Cells(r, portCols("Coin")).Value))
@@ -559,6 +709,7 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
             Else
                 wsP.Cells(r, portCols("market price")).ClearContents
                 priceErrMsg = "Can not fetch the """ & coin & """ price."
+                gPriceFetchFailed = True
                 GoTo PriceFail_MP
             End If
         End If
@@ -577,6 +728,7 @@ PriceFail_MP:
     If Len(priceErrMsg) > 0 Then
         MsgBox priceErrMsg, vbExclamation
     End If
+    gPriceFetchFailed = False
     Exit Sub
 
 Clean:
@@ -2073,6 +2225,18 @@ Public Sub Take_Daily_Snapshot()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
 
+    Dim formShown As Boolean: formShown = False
+    On Error Resume Next
+    With MsgForm
+        .Label1.Caption = "Updating Capital and Position..."
+        .Label1.WordWrap = True
+        .StartUpPosition = 1
+        .Show vbModeless
+        formShown = True
+    End With
+    DoEvents
+    On Error GoTo Fail
+
     ' Snapshot date from Position!B3 (UTC+7); fallback to today if invalid
     Dim snapDt As Date
     If Not GetCutoffFromPositionB3(snapDt) Then snapDt = Date
@@ -2264,7 +2428,9 @@ Public Sub Take_Daily_Snapshot()
     End If
 
     wsS.Columns("A:L").AutoFit
-    MsgBox "Daily snapshot saved for " & Format$(snapDt, "yyyy-mm-dd"), vbInformation
+    If Not gSuppressPositionMsg Then
+        MsgBox "Daily snapshot saved for " & Format$(snapDt, "yyyy-mm-dd"), vbInformation
+    End If
 
 Clean:
     Application.EnableEvents = True
@@ -2421,9 +2587,7 @@ Private Function NzStr(ByVal v As Variant) As String
     If IsError(v) Or IsEmpty(v) Then NzStr = "" Else NzStr = CStr(v)
 End Function
 
-' =============================================================================
 ' ========================= BATCH SNAPSHOT UPDATER ============================
-' =============================================================================
 ' Update all missing daily snapshots from Daily_Snapshot!A2 (start date)
 ' up to the current cutoff date on Position!B3. Creates rows only for
 ' missing dates; existing dates are left unchanged.
@@ -2449,9 +2613,8 @@ Public Sub Update_All_Snapshot()
     Else
         Err.Raise 1004, , "Daily_Snapshot!A2 must contain a start date."
     End If
-    If startDate > cutoff Then GoTo Clean ' nothing to do
+    If startDate > cutoff Then GoTo Clean
 
-    ' Build a set of existing dates to avoid overwriting
     Dim exists As Object: Set exists = CreateObject("Scripting.Dictionary")
     exists.CompareMode = vbTextCompare
     Dim lastRow As Long: lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
@@ -2467,16 +2630,13 @@ Public Sub Update_All_Snapshot()
     gSuppressPositionMsg = True
     For d = startDate To cutoff
         If Not exists.Exists(AddDateKey(d)) Then
-            ' Rebuild Position for date d by setting cutoff and running full update
             wsP.Range(mod_config.CELL_CUTOFF).Value = d
-            Update_All_Position
-            ' Take snapshot for this date
+            Update_Capital_and_Position
             Take_Daily_Snapshot
         End If
     Next d
     gSuppressPositionMsg = False
 
-    ' Restore original cutoff
     wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoff
 
 Clean:
@@ -2491,7 +2651,107 @@ Fail:
     MsgBox "Error (Update_All_Snapshot): " & Err.Description, vbExclamation
 End Sub
 
+Private Function Backfill3MSnapshots(wsP As Worksheet, ByVal cutoffDate As Date) As Boolean
+    On Error GoTo Fail
+    Dim wsS As Worksheet
+    Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
+    If wsS Is Nothing Then Exit Function
+
+    Dim cutoffDay As Date
+    cutoffDay = DateValue(cutoffDate)
+    Dim startDate As Date
+    startDate = DateAdd("m", -3, cutoffDay)
+    If startDate < DateSerial(1900, 1, 1) Then startDate = DateSerial(1900, 1, 1)
+    If startDate > cutoffDay Then Exit Function
+
+    Dim exists As Object: Set exists = CreateObject("Scripting.Dictionary")
+    exists.CompareMode = vbTextCompare
+
+    Dim lastRow As Long, r As Long
+    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    For r = 2 To lastRow
+        If IsDate(wsS.Cells(r, 1).Value) Then exists(AddDateKey(DateValue(wsS.Cells(r, 1).Value))) = True
+    Next r
+
+    Dim missing As Collection: Set missing = New Collection
+    Dim d As Date
+    For d = startDate To cutoffDay
+        If Not exists.Exists(AddDateKey(d)) Then missing.Add d
+    Next d
+    If missing.Count = 0 Then Exit Function
+
+    Dim formShown As Boolean: formShown = False
+    On Error Resume Next
+    With MsgForm
+        .Label1.Caption = "Updating missing snapshots..."
+        .Label1.WordWrap = True
+        .StartUpPosition = 1
+        .Show vbModeless
+        formShown = True
+    End With
+    DoEvents
+    On Error GoTo Fail
+
+    Dim originalCutoff As Variant
+    originalCutoff = wsP.Range(mod_config.CELL_CUTOFF).Value
+
+    Dim savedSuppress As Boolean: savedSuppress = gSuppressPositionMsg
+    Dim savedSkip As Boolean: savedSkip = gSkipAutoSnapshot
+
+    gInNav3MBackfill = True
+    gSuppressPositionMsg = True
+    gSkipAutoSnapshot = True
+
+    Dim dt As Variant
+    For Each dt In missing
+        wsP.Range(mod_config.CELL_CUTOFF).Value = dt
+        Update_Capital_and_Position
+        Take_Daily_Snapshot
+    Next dt
+
+    If cutoffDay = Date Then
+        Dim prev As Date: prev = DateAdd("d", -1, cutoffDay)
+        If prev >= DateSerial(1900, 1, 1) Then
+            wsP.Range(mod_config.CELL_CUTOFF).Value = prev
+            Update_Capital_and_Position
+            Take_Daily_Snapshot
+        End If
+        wsP.Range(mod_config.CELL_CUTOFF).Value = cutoffDay
+        Update_Capital_and_Position
+        Take_Daily_Snapshot
+    End If
+
+    wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoff
+    gSkipAutoSnapshot = savedSkip
+    gSuppressPositionMsg = savedSuppress
+
+    If formShown Then Unload MsgForm
+    Backfill3MSnapshots = True
+    gInNav3MBackfill = False
+    Exit Function
+Fail:
+    Dim errNum As Long: errNum = Err.Number
+    Dim errDesc As String: errDesc = Err.Description
+    On Error Resume Next
+    wsP.Range(mod_config.CELL_CUTOFF).Value = originalCutoff
+    gSkipAutoSnapshot = savedSkip
+    gSuppressPositionMsg = savedSuppress
+    If formShown Then Unload MsgForm
+    gInNav3MBackfill = False
+    On Error GoTo 0
+    Backfill3MSnapshots = False
+    If errNum <> 0 Then Err.Raise errNum, "Backfill3MSnapshots", errDesc
+End Function
 Private Function AddDateKey(ByVal d As Date) As String
     AddDateKey = Format$(d, "yyyy-mm-dd")
 End Function
+
+
+
+
+
+
+
+
+
 
