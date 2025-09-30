@@ -5,7 +5,7 @@ Generated: 2025-09-10
 Excel/VBA workbook to aggregate crypto orders into positions, P&L, dashboard totals, and portfolio charts.
 
 Core macros
-- Refresh_Daily_Data: rebuilds Position table up to the cutoff, computes Cash/Coin/NAV, Deposit/Withdraw/Total PnL, formats the sheet, and updates portfolio charts (Cash vs Coin, Portfolio_Category_Daily, Portfolio_Alt.TOP_Daily, Portfolio_Alt.MID_Daily, Portfolio_Alt.LOW_Daily). Shows a single final message on completion.
+- Refresh_Daily_Data: rebuilds Position table up to the cutoff, computes Cash/Coin/NAV, Deposit/Withdraw/Total PnL, formats the sheet, and updates portfolio charts (Cash vs Coin, Portfolio_Category_Daily, Alt.TOP, Alt.MID, Alt.LOW). Shows a single final message on completion.
 - Update_MarketPrice_ByCutoff_OpenOnly_Simple: updates Market Price for Open rows only using cutoff rules (see Time & Cutoff). Stablecoins are priced at 1.
 - Take_Daily_Snapshot: upserts a row per date into Daily_Snapshot (see layout below).
 - Update_All_Snapshot: fills all missing daily snapshot rows from Daily_Snapshot!A2 (start date) to Position!B3 (cutoff). For each missing date it sets the cutoff, rebuilds Position (silent), writes the snapshot, then restores the original cutoff.
@@ -131,9 +131,9 @@ Core macros
 - From Refresh_Daily_Data (on Position sheet):
   - Cash vs Coin (pie)
   - Coin Category: pie by group (BTC, Alt.TOP, Alt.MID, Alt.LOW)
-  - Alt.TOP: pie by coin within Alt.TOP
-  - Alt.MID: pie by coin within Alt.MID
-  - Alt.LOW: pie by coin within Alt.LOW
+  - Alt.TOP (ChartObject name: "Alt.TOP"): pie by coin within Alt.TOP
+  - Alt.MID (ChartObject name: "Alt.MID"): pie by coin within Alt.MID
+  - Alt.LOW (ChartObject name: "Alt.LOW"): pie by coin within Alt.LOW
   - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~10% margins around 3-month min/max, rounded to thousands.
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
@@ -166,7 +166,7 @@ Core macros
 ## Version History
 - v2.7.0:
   - Pricing priority: Binance first (D1 close/realtime), then Exchange-specific pricing (OKX/Bybit) using daily close for past cutoffs and realtime for today. If both fail the macro stops with the fetch error.
-  - Position charts: added three daily pies — `Portfolio_Alt.TOP_Daily`, `Portfolio_Alt.MID_Daily`, `Portfolio_Alt.LOW_Daily` — showing per-coin breakdowns within Alt groups.
+  - Position charts: added three daily pies showing per-coin breakdowns within Alt groups. ChartObject names are now short: `Alt.TOP`, `Alt.MID`, `Alt.LOW` (legacy names `Portfolio_Alt.*_Daily` are auto-renamed in code).
   - Removed per-coin pie `Portfolio_Coin` from Position.
   - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.
   - Added `NAV 3M` chart (line) with date axis; legend hidden; auto-scaled Y axis with 10% margin around 3M min/max, rounded to thousands.

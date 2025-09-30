@@ -1,6 +1,5 @@
-﻿Attribute VB_Name = "mod_position"
 Option Explicit
-' Last Modified (UTC): 2025-09-28T06:35:44Z
+' Last Modified (UTC): 2025-09-30T01:12:00Z
 
 ' Batch control: suppress message boxes from Update_Capital_and_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -157,26 +156,26 @@ Private Sub Update_Capital_and_Position()
         GoTo Clean
     End If
 
-    ' --- Cutoff from Position!B3 (UTC+7). Date-only -> 23:59:59 of that day.
+    ' --- Cutoff from Position!B3 (UTC+0). Date-only -> 23:59:59 of that day.
     Dim cutoffEnabled As Boolean: cutoffEnabled = False
-    Dim cutoffDtUTC7 As Date
-    If GetCutoffFromPositionB3(cutoffDtUTC7) Then cutoffEnabled = True
+    Dim cutoffUTC As Date
+    If GetCutoffFromPositionB3(cutoffUTC) Then cutoffEnabled = True
 
     Dim cutoffHi As Date
     If cutoffEnabled Then
-        If cutoffDtUTC7 = Int(cutoffDtUTC7) Then
-            cutoffHi = DateAdd("s", -1, DateAdd("d", 1, cutoffDtUTC7)) ' 23:59:59 end-of-day
+        If cutoffUTC = Int(cutoffUTC) Then
+            cutoffHi = DateAdd("s", -1, DateAdd("d", 1, cutoffUTC)) ' 23:59:59 end-of-day
         Else
-            cutoffHi = cutoffDtUTC7
+            cutoffHi = cutoffUTC
         End If
     End If
 
-    Dim dayCutoffUTC7 As Date: dayCutoffUTC7 = IIf(cutoffEnabled, DateValue(cutoffDtUTC7), Date)
-    Dim todayUTC7 As Date: todayUTC7 = Date
+    Dim dayCutoffUTC As Date: dayCutoffUTC = IIf(cutoffEnabled, DateValue(cutoffUTC), Date)
+    Dim todayUTC As Date: todayUTC = Date
 
     If cutoffEnabled Then
-        Dim cutoffDateOnly As Date: cutoffDateOnly = dayCutoffUTC7
-        If cutoffDateOnly = todayUTC7 And Not gSkipAutoSnapshot Then
+        Dim cutoffDateOnly As Date: cutoffDateOnly = dayCutoffUTC
+        If cutoffDateOnly = todayUTC And Not gSkipAutoSnapshot Then
             Dim prevCutoff As Date: prevCutoff = DateAdd("d", -1, cutoffDateOnly)
             If prevCutoff >= DateSerial(1900, 1, 1) Then
                 Dim originalCutoffValue As Variant: originalCutoffValue = wsP.Range(mod_config.CELL_CUTOFF).Value
@@ -194,7 +193,7 @@ Private Sub Update_Capital_and_Position()
 
     If Not gInNav3MBackfill Then
         ' Ensure Daily_Snapshot has no gaps within the NAV 3M lookback; helper reruns update if needed
-        If Backfill3MSnapshots(wsP, dayCutoffUTC7) Then
+        If Backfill3MSnapshots(wsP, dayCutoffUTC) Then
             Application.EnableEvents = True
             Application.ScreenUpdating = True
             Exit Sub
@@ -219,10 +218,10 @@ Private Sub Update_Capital_and_Position()
     ' Optional "Total" column support
     Dim colTotal As Long: colTotal = 0
     On Error Resume Next
-    If ordCols.Exists("Total") Then colTotal = CLng(ordCols("Total"))
+    If ordCols.exists("Total") Then colTotal = CLng(ordCols("Total"))
     On Error GoTo 0
 
-    Dim r As Long, vDate As Variant, vDateUTC7 As Date
+    Dim r As Long, vDate As Variant, vDateUTC As Date
     Dim vSide As String, vCoin As String
     Dim vQty As Double, vPrice As Double, vFee As Double, vEx As String
     Dim vTotal As Double, hasTotal As Boolean
@@ -232,8 +231,8 @@ Private Sub Update_Capital_and_Position()
     For r = hdrO + 1 To lastO
         vDate = wsO.Cells(r, ordCols("Date")).Value
         If IsDate(vDate) Then
-            vDateUTC7 = OrderToUTC7(CDate(vDate))
-            If (Not cutoffEnabled) Or (vDateUTC7 <= cutoffHi) Then
+            vDateUTC = OrderToUTC(CDate(vDate))
+            If (Not cutoffEnabled) Or (vDateUTC <= cutoffHi) Then
                 vSide = UCase$(Trim$(CStr(wsO.Cells(r, ordCols("Type")).Value)))
                 vCoin = Trim$(CStr(wsO.Cells(r, ordCols("Coin")).Value))
                 vQty = NzD(wsO.Cells(r, ordCols("Qty")).Value)
@@ -267,37 +266,37 @@ Private Sub Update_Capital_and_Position()
 
                 ' ---- Sessions (build P/L rows)
                 If vCoin <> "" And vQty <> 0 Then
-                    If stateRun.Exists(vCoin) Then runQty = stateRun(vCoin) Else runQty = 0#
+                    If stateRun.exists(vCoin) Then runQty = stateRun(vCoin) Else runQty = 0#
                     Select Case vSide
                         Case "BUY"
                             If Abs(runQty) <= mod_config.EPS_CLOSE Then
-                                Set sess = NewSession(vCoin, vDateUTC7)
+                                Set sess = NewSession(vCoin, vDateUTC)
                                 Set stateSess(vCoin) = sess
                             Else
                                 Set sess = stateSess(vCoin)
                             End If
                             sess("BuyQty") = sess("BuyQty") + vQty
                             sess("Cost") = sess("Cost") + (vQty * vPrice) + vFee
-                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC7, vEx
+                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC, vEx
                             runQty = runQty + vQty
                             stateRun(vCoin) = runQty
                             Set stateSess(vCoin) = sess
 
                         Case "SELL"
-                            If Not stateSess.Exists(vCoin) Then
-                                Set sess = NewSession(vCoin, vDateUTC7)
+                            If Not stateSess.exists(vCoin) Then
+                                Set sess = NewSession(vCoin, vDateUTC)
                             Else
                                 Set sess = stateSess(vCoin)
                             End If
                             sess("SellQty") = sess("SellQty") + vQty
                             sess("SellProceeds") = sess("SellProceeds") + (vQty * vPrice) - vFee
-                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC7, vEx
+                            If vEx <> "" Then UpdateLatestExchangeInSession sess, vDateUTC, vEx
                             runQty = runQty - vQty
                             stateRun(vCoin) = runQty
                             Set stateSess(vCoin) = sess
 
                             If runQty <= mod_config.EPS_CLOSE Then
-                                sess("CloseDate") = vDateUTC7
+                                sess("CloseDate") = vDateUTC
                                 sess("AvailableQty") = 0#
                                 sessions.Add sess
                                 stateSess.Remove vCoin
@@ -322,7 +321,7 @@ Private Sub Update_Capital_and_Position()
     Dim openExByCoin As Object: Set openExByCoin = CreateObject("Scripting.Dictionary"): openExByCoin.CompareMode = vbTextCompare
 
     Dim i As Long, ss As Object
-    For i = 1 To sessions.Count
+    For i = 1 To sessions.count
         Set ss = sessions(i)
         If ss("AvailableQty") > mod_config.EPS_CLOSE Then
             openExByCoin(ss("Coin")) = CStr(NzStr(ss("Storage")))
@@ -330,19 +329,19 @@ Private Sub Update_Capital_and_Position()
     Next i
 
     Dim coin As Variant, exName As String, px As Variant
-    If openExByCoin.Count > 0 Then
+    If openExByCoin.count > 0 Then
         For Each coin In openExByCoin.Keys
             exName = CStr(openExByCoin(coin))
             Dim sym As String: sym = MapCoinToBinanceSymbol(CStr(coin))
             ' 1) Try Binance first (D1 close for history, realtime for today)
-            If dayCutoffUTC7 < todayUTC7 Then
-                px = GetBinanceDailyCloseUTC(sym, dayCutoffUTC7)
+            If dayCutoffUTC < todayUTC Then
+                px = GetBinanceDailyCloseUTC(sym, dayCutoffUTC)
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
             ' 2) If Binance unavailable, try the exchange from Order_History (storage)
             If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 Then
-                px = GetExchangePriceByCutoff(exName, CStr(coin), dayCutoffUTC7, todayUTC7)
+                px = GetExchangePriceByCutoff(exName, CStr(coin), dayCutoffUTC, todayUTC)
             End If
             ' 3) Stablecoin fixed price
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(CStr(coin)) Then px = 1#
@@ -369,7 +368,7 @@ Private Sub Update_Capital_and_Position()
     ' Per-row available balance for Open positions to compute %NAV after NAV is known
     Dim openRowVals As Object: Set openRowVals = CreateObject("Scripting.Dictionary"): openRowVals.CompareMode = vbTextCompare
 
-    For i = 1 To sessions.Count
+    For i = 1 To sessions.count
         Set ss = sessions(i)
 
         If ss("BuyQty") > mod_config.EPS_ZERO Then avgBuy = ss("Cost") / ss("BuyQty") Else avgBuy = vbNullString
@@ -379,7 +378,7 @@ Private Sub Update_Capital_and_Position()
         ' Market price for Open only
         mktPrice = vbNullString
         If posText = "Open" And portCols("market price") > 0 Then
-            If priceMap.Exists(ss("Coin")) Then mktPrice = priceMap(ss("Coin"))
+            If priceMap.exists(ss("Coin")) Then mktPrice = priceMap(ss("Coin"))
         End If
 
         ' Available balance (unrealized)
@@ -448,7 +447,7 @@ Private Sub Update_Capital_and_Position()
             If IsNumeric(availBal) Then
                 If CDbl(availBal) > 0 Then
                     Dim ckey As String: ckey = CStr(ss("Coin"))
-                    If coinVals.Exists(ckey) Then
+                    If coinVals.exists(ckey) Then
                         coinVals(ckey) = CDbl(coinVals(ckey)) + CDbl(availBal)
                     Else
                         coinVals(ckey) = CDbl(availBal)
@@ -462,14 +461,14 @@ Private Sub Update_Capital_and_Position()
             WriteCellSafe wsP, rowOut, portCols("profit"), profitVal
             If IsNumeric(profitVal) Then
                 If profitVal > 0 Then
-                    wsP.Cells(rowOut, portCols("profit")).Font.Color = mod_config.COLOR_PNL_POSITIVE
+                    wsP.Cells(rowOut, portCols("profit")).Font.color = mod_config.COLOR_PNL_POSITIVE
                 ElseIf profitVal < 0 Then
-                    wsP.Cells(rowOut, portCols("profit")).Font.Color = mod_config.COLOR_PNL_NEGATIVE
+                    wsP.Cells(rowOut, portCols("profit")).Font.color = mod_config.COLOR_PNL_NEGATIVE
                 Else
-                    wsP.Cells(rowOut, portCols("profit")).Font.Color = vbBlack
+                    wsP.Cells(rowOut, portCols("profit")).Font.color = vbBlack
                 End If
             Else
-                wsP.Cells(rowOut, portCols("profit")).Font.Color = vbBlack
+                wsP.Cells(rowOut, portCols("profit")).Font.color = vbBlack
             End If
         End If
 
@@ -478,14 +477,14 @@ Private Sub Update_Capital_and_Position()
             WriteCellSafe wsP, rowOut, portCols("%PnL"), pnlPctVal
             If IsNumeric(pnlPctVal) Then
                 If pnlPctVal > 0 Then
-                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = mod_config.COLOR_PNL_POSITIVE
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.color = mod_config.COLOR_PNL_POSITIVE
                 ElseIf pnlPctVal < 0 Then
-                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = mod_config.COLOR_PNL_NEGATIVE
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.color = mod_config.COLOR_PNL_NEGATIVE
                 Else
-                    wsP.Cells(rowOut, portCols("%PnL")).Font.Color = vbBlack
+                    wsP.Cells(rowOut, portCols("%PnL")).Font.color = vbBlack
                 End If
             Else
-                wsP.Cells(rowOut, portCols("%PnL")).Font.Color = vbBlack
+                wsP.Cells(rowOut, portCols("%PnL")).Font.color = vbBlack
             End If
         End If
 
@@ -535,7 +534,7 @@ Private Sub Update_Capital_and_Position()
     End If
 
     ' --- NAV metrics over last 3 months (from Daily_Snapshot)
-    UpdateNav3M_MetricsAndChart wsP, dayCutoffUTC7, totalNAV
+    UpdateNav3M_MetricsAndChart wsP, dayCutoffUTC, totalNAV
     ' --- Allocation metrics (%Coin, %BTC, %Alt.*, Num Alt.* coins)
     UpdateAllocationMetrics wsP, coinVals, totalHoldValue, totalNAV
 
@@ -603,7 +602,7 @@ AfterPriceCheck:
     checkCapitalRuleViolation
     On Error GoTo 0
     If cutoffEnabled Then
-        If gSkipAutoSnapshot Or dayCutoffUTC7 = todayUTC7 Then
+        If gSkipAutoSnapshot Or dayCutoffUTC = todayUTC Then
             Dim savedSuppressSnapshot As Boolean
             savedSuppressSnapshot = gSuppressPositionMsg
             gSuppressPositionMsg = True
@@ -627,8 +626,8 @@ End Sub
 ' =============================================================================
 ' ======= INDEPENDENT MACRO: UPDATE MARKET PRICE (OPEN ONLY) ==================
 ' =============================================================================
-' Cutoff is from Position!B3 (UTC+7). We decide:
-' - If cutoff DAY (UTC+7) < today (UTC+7): fetch Binance D1 close by interpreting the cutoff DATE as a UTC calendar day.
+' Cutoff is from Position!B3 (UTC+0). We decide:
+' - If cutoff DAY (UTC+0) < today (UTC+0): fetch Binance D1 close by interpreting the cutoff DATE as a UTC calendar day.
 ' - Else: fetch realtime.
 Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     On Error GoTo Fail
@@ -637,14 +636,14 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     Set wsP = SheetByName(mod_config.SHEET_PORTFOLIO)
     If wsP Is Nothing Then Err.Raise 1004, , "Sheet '" & mod_config.SHEET_PORTFOLIO & "' not found."
 
-    Dim cutoffUTC7 As Date
-    If Not GetCutoffFromPositionB3(cutoffUTC7) Then
-        MsgBox "Cutoff is missing/invalid. Please fill Position!B3 (UTC+7), e.g., 2025-08-31 or 2025-08-31 15:30.", vbExclamation
+    Dim cutoffUTC As Date
+    If Not GetCutoffFromPositionB3(cutoffUTC) Then
+        MsgBox "Cutoff is missing/invalid. Please fill Position!B3 (UTC+0), e.g., 2025-08-31 or 2025-08-31 15:30.", vbExclamation
         GoTo Clean
     End If
 
-    Dim dayCutoffUTC7 As Date: dayCutoffUTC7 = DateValue(cutoffUTC7)
-    Dim todayUTC7 As Date: todayUTC7 = Date
+    Dim dayCutoffUTC As Date: dayCutoffUTC = DateValue(cutoffUTC)
+    Dim todayUTC As Date: todayUTC = Date
 
     Dim hdrRow As Long: hdrRow = DetectPortfolioHeaderRow(wsP)
     If hdrRow = 0 Then Err.Raise 1004, , "Header not found on Position."
@@ -691,14 +690,14 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
             Dim exName As String: exName = ""
             If portCols("storage") > 0 Then exName = Trim$(CStr(wsP.Cells(r, portCols("storage")).Value))
             sym = MapCoinToBinanceSymbol(coin)
-            If dayCutoffUTC7 < todayUTC7 Then
-                Dim dayUTC As Date: dayUTC = DateValue(cutoffUTC7)
+            If dayCutoffUTC < todayUTC Then
+                Dim dayUTC As Date: dayUTC = DateValue(cutoffUTC)
                 px = GetBinanceDailyCloseUTC(sym, dayUTC)
             Else
                 px = GetBinanceRealtimePrice(sym)
             End If
             If (Not IsNumeric(px) Or px <= 0) And Len(exName) > 0 Then
-                px = GetExchangePriceByCutoff(exName, coin, dayCutoffUTC7, todayUTC7)
+                px = GetExchangePriceByCutoff(exName, coin, dayCutoffUTC, todayUTC)
             End If
             ' Stablecoin -> 1
             If (Not IsNumeric(px) Or px <= 0) And IsStableCoin(coin) Then px = 1#
@@ -789,7 +788,7 @@ Private Sub UpdateAllocationMetrics(wsP As Worksheet, ByVal coinVals As Object, 
                 vBTC = vBTC + v
             Else
                 grp = vbNullString
-                If Not (mapCG Is Nothing) And mapCG.Exists(name) Then grp = CStr(mapCG(name))
+                If Not (mapCG Is Nothing) And mapCG.exists(name) Then grp = CStr(mapCG(name))
                 Select Case NormalizeHeader(grp)
                     Case NormalizeHeader("Alt.TOP"): vTop = vTop + v: cTop = cTop + 1
                     Case NormalizeHeader("Alt.MID"): vMid = vMid + v: cMid = cMid + 1
@@ -884,7 +883,7 @@ Private Sub WriteActionText(ByVal ws As Worksheet, ByVal addr As String, ByVal t
     Set rg = ws.Range(addr)
     If rg.MergeCells Then Set rg = rg.MergeArea.Cells(1, 1)
     rg.Value = text
-    rg.Font.Color = color
+    rg.Font.color = color
     rg.Font.Bold = isBold
     On Error GoTo 0
 End Sub
@@ -932,7 +931,7 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     If wsS Is Nothing Then GoTo Done
 
     Dim fromDt As Date: fromDt = DateAdd("m", -3, cutoffDate)
-    Dim lastR As Long: lastR = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    Dim lastR As Long: lastR = wsS.Cells(wsS.Rows.count, 1).End(xlUp).Row
 
     Dim r As Long, dt As Date, nav As Double
     Dim cnt As Long: cnt = 0
@@ -1029,9 +1028,9 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     On Error GoTo 0
     If co Is Nothing Then
         Set co = wsP.ChartObjects.Add(Left:=20, Top:=500, Width:=520, Height:=260)
-        co.Name = "NAV 3M"
+        co.name = "NAV 3M"
         co.Chart.HasTitle = True
-        co.Chart.ChartTitle.Text = "NAV 3M"
+        co.Chart.ChartTitle.text = "NAV 3M"
         created = True
     End If
     Set ch = co.Chart
@@ -1045,13 +1044,13 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     On Error GoTo 0
 
     Dim s As Series
-    If ch.SeriesCollection.Count = 0 Then Set s = ch.SeriesCollection.NewSeries Else Set s = ch.SeriesCollection(1)
+    If ch.SeriesCollection.count = 0 Then Set s = ch.SeriesCollection.NewSeries Else Set s = ch.SeriesCollection(1)
     Dim k As Long
-    For k = ch.SeriesCollection.Count To 2 Step -1: ch.SeriesCollection(k).Delete: Next k
+    For k = ch.SeriesCollection.count To 2 Step -1: ch.SeriesCollection(k).Delete: Next k
 
     If cnt > 0 Then
         ' Bind X to a worksheet date range so tooltips show dates, not serials
-        Dim helperCol As Long: helperCol = wsP.Columns.Count - 1 ' second-to-last column (hidden)
+        Dim helperCol As Long: helperCol = wsP.Columns.count - 1 ' second-to-last column (hidden)
         Dim dest As Range: Set dest = wsP.Range(wsP.Cells(2, helperCol), wsP.Cells(1 + cnt, helperCol))
         Dim v2() As Variant: ReDim v2(1 To cnt, 1 To 1)
         For i = 1 To cnt
@@ -1102,12 +1101,12 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     Dim yMin As Double, yMax As Double, unit As Double
     unit = 1000#
     If navATL > 0 Then
-        yMin = navATL * 0.95   ' 5% margin below
+        yMin = navATL * 0.9   ' 5% margin below
     Else
         yMin = 0#
     End If
     If navATH > 0 Then
-        yMax = navATH * 1.05   ' 5 margin above
+        yMax = navATH * 1.1   ' 5 margin above
     Else
         yMax = 1#
     End If
@@ -1145,7 +1144,7 @@ Private Sub UpdateCashCoinChart(wsP As Worksheet)
         For Each coIt In wsP.ChartObjects
             If Not coIt Is Nothing Then
                 If coIt.Chart.HasTitle Then
-                    If StrComp(coIt.Chart.ChartTitle.Text, "Cash vs Coin", vbTextCompare) = 0 Then
+                    If StrComp(coIt.Chart.ChartTitle.text, "Cash vs Coin", vbTextCompare) = 0 Then
                         Set co = coIt
                         Exit For
                     End If
@@ -1168,7 +1167,7 @@ Private Sub UpdateCashCoinChart(wsP As Worksheet)
     Set ch = co.Chart
 
     Dim s As Series
-    If ch.SeriesCollection.Count = 0 Then
+    If ch.SeriesCollection.count = 0 Then
         Set s = ch.SeriesCollection.NewSeries
     Else
         Set s = ch.SeriesCollection(1)
@@ -1176,7 +1175,7 @@ Private Sub UpdateCashCoinChart(wsP As Worksheet)
 
     ' Ensure only one series (first) remains
     Dim i As Long
-    For i = ch.SeriesCollection.Count To 2 Step -1
+    For i = ch.SeriesCollection.count To 2 Step -1
         ch.SeriesCollection(i).Delete
     Next i
 
@@ -1246,7 +1245,7 @@ Public Sub Update_Portfolio1_FromCategory()
                     availBal = qty * mkt
                 End If
                 If availBal > 0 Then
-                    If holdDict.Exists(coin) Then
+                    If holdDict.exists(coin) Then
                         holdDict(coin) = holdDict(coin) + availBal
                     Else
                         holdDict(coin) = availBal
@@ -1270,13 +1269,13 @@ Public Sub Update_Portfolio1_FromCategory()
         v = CDbl(holdDict(k))
         If UCase$(CStr(k)) = "BTC" Then
             grp = "BTC"
-        ElseIf coinToGroup.Exists(CStr(k)) Then
+        ElseIf coinToGroup.exists(CStr(k)) Then
             grp = CStr(coinToGroup(k))
         Else
             ' Unmapped coin ???????? skip (do not block chart update/rename)
             grp = vbNullString
         End If
-        If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + v
+        If gVals.exists(grp) Then gVals(grp) = gVals(grp) + v
     Next k
 
     ' 4) Update chart "Portfolio1" on Position sheet or chart sheet
@@ -1297,23 +1296,23 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
         For Each coIt In wsP.ChartObjects
             If Not coIt Is Nothing Then
                 If coIt.Chart.HasTitle Then
-                    If StrComp(coIt.Chart.ChartTitle.Text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                    If StrComp(coIt.Chart.ChartTitle.text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
                         Set co = coIt
                         Exit For
                     End If
                 End If
                 ' Legacy names support: rename to new canonical name
                 If co Is Nothing Then
-                    If StrComp(coIt.Name, "Portfolio1", vbTextCompare) = 0 _
-                       Or StrComp(coIt.Name, "Portfolio 1", vbTextCompare) = 0 _
-                       Or StrComp(coIt.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0) _
-                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0) _
-                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0) Then
+                    If StrComp(coIt.name, "Portfolio1", vbTextCompare) = 0 _
+                       Or StrComp(coIt.name, "Portfolio 1", vbTextCompare) = 0 _
+                       Or StrComp(coIt.name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.text, "Portfolio1", vbTextCompare) = 0) _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.text, "Portfolio 1", vbTextCompare) = 0) _
+                       Or (coIt.Chart.HasTitle And StrComp(coIt.Chart.ChartTitle.text, "Portfolio_Category_Daily", vbTextCompare) = 0) Then
                         On Error Resume Next
-                        coIt.Name = mod_config.CHART_PORTFOLIO1
+                        coIt.name = mod_config.CHART_PORTFOLIO1
                         coIt.Chart.HasTitle = True
-                        coIt.Chart.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                        coIt.Chart.ChartTitle.text = mod_config.CHART_PORTFOLIO1
                         On Error GoTo 0
                         Set co = coIt
                         Exit For
@@ -1326,31 +1325,31 @@ Private Function UpdatePortfolio1Chart(wsP As Worksheet, gVals As Object) As Boo
         ' Also search chart sheets by name or title
         Dim chs As Chart
         For Each chs In ThisWorkbook.Charts
-            If StrComp(chs.Name, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+            If StrComp(chs.name, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
                 UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
                 Exit Function
             End If
             If chs.HasTitle Then
-                If StrComp(chs.ChartTitle.Text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
+                If StrComp(chs.ChartTitle.text, mod_config.CHART_PORTFOLIO1, vbTextCompare) = 0 Then
                     UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
                     Exit Function
                 End If
             End If
             ' Legacy chart sheet names/titles -> rename then use
-            If StrComp(chs.Name, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
+            If StrComp(chs.name, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.name, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.name, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
                 On Error Resume Next
-                chs.Name = mod_config.CHART_PORTFOLIO1
+                chs.name = mod_config.CHART_PORTFOLIO1
                 chs.HasTitle = True
-                chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                chs.ChartTitle.text = mod_config.CHART_PORTFOLIO1
                 On Error GoTo 0
                 UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
                 Exit Function
             End If
             If chs.HasTitle Then
-                If StrComp(chs.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
+                If StrComp(chs.ChartTitle.text, "Portfolio1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.text, "Portfolio 1", vbTextCompare) = 0 Or StrComp(chs.ChartTitle.text, "Portfolio_Category_Daily", vbTextCompare) = 0 Then
                     On Error Resume Next
                     chs.HasTitle = True
-                    chs.ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+                    chs.ChartTitle.text = mod_config.CHART_PORTFOLIO1
                     On Error GoTo 0
                     UpdatePortfolio1Chart = ApplyPortfolioSeriesToChart(chs, gVals)
                     Exit Function
@@ -1374,19 +1373,19 @@ Private Sub EnsureCoinCategoryChartName(wsP As Worksheet, ByVal canonical As Str
     ' Direct match by old names
     For Each co In wsP.ChartObjects
         If co Is Nothing Then GoTo NextOne
-        If StrComp(co.Name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-           Or StrComp(co.Name, "Portfolio1", vbTextCompare) = 0 _
-           Or StrComp(co.Name, "Portfolio 1", vbTextCompare) = 0 Then
-            co.Name = canonical
+        If StrComp(co.name, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+           Or StrComp(co.name, "Portfolio1", vbTextCompare) = 0 _
+           Or StrComp(co.name, "Portfolio 1", vbTextCompare) = 0 Then
+            co.name = canonical
             co.Chart.HasTitle = True
-            co.Chart.ChartTitle.Text = canonical
+            co.Chart.ChartTitle.text = canonical
         ElseIf co.Chart.HasTitle Then
-            If StrComp(co.Chart.ChartTitle.Text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
-               Or StrComp(co.Chart.ChartTitle.Text, "Portfolio1", vbTextCompare) = 0 _
-               Or StrComp(co.Chart.ChartTitle.Text, "Portfolio 1", vbTextCompare) = 0 Then
-                co.Name = canonical
+            If StrComp(co.Chart.ChartTitle.text, "Portfolio_Category_Daily", vbTextCompare) = 0 _
+               Or StrComp(co.Chart.ChartTitle.text, "Portfolio1", vbTextCompare) = 0 _
+               Or StrComp(co.Chart.ChartTitle.text, "Portfolio 1", vbTextCompare) = 0 Then
+                co.name = canonical
                 co.Chart.HasTitle = True
-                co.Chart.ChartTitle.Text = canonical
+                co.Chart.ChartTitle.text = canonical
             End If
         End If
 NextOne:
@@ -1400,13 +1399,13 @@ End Sub
 Private Function ApplyPortfolioSeriesToChart(ByVal ch As Chart, ByVal gVals As Object) As Boolean
     On Error GoTo Fail
     Dim s As Series
-    If ch.SeriesCollection.Count = 0 Then
+    If ch.SeriesCollection.count = 0 Then
         Set s = ch.SeriesCollection.NewSeries
     Else
         Set s = ch.SeriesCollection(1)
     End If
     Dim i As Long
-    For i = ch.SeriesCollection.Count To 2 Step -1
+    For i = ch.SeriesCollection.count To 2 Step -1
         ch.SeriesCollection(i).Delete
     Next i
 
@@ -1443,7 +1442,7 @@ Private Function BuildCoinToGroupFromCategorySheet(wsC As Worksheet) As Object
     '    and each column lists coins under that group starting row 2.
     Dim d As Object: Set d = CreateObject("Scripting.Dictionary"): d.CompareMode = vbTextCompare
 
-    Dim lastCol As Long: lastCol = wsC.Cells(1, wsC.Columns.Count).End(xlToLeft).Column
+    Dim lastCol As Long: lastCol = wsC.Cells(1, wsC.Columns.count).End(xlToLeft).Column
     If lastCol < 1 Then Set BuildCoinToGroupFromCategorySheet = d: Exit Function
 
     Dim coinCol As Long, groupCol As Long, c As Long
@@ -1457,7 +1456,7 @@ Private Function BuildCoinToGroupFromCategorySheet(wsC As Worksheet) As Object
 
     Dim r As Long
     If coinCol > 0 And groupCol > 0 Then
-        Dim lastRow As Long: lastRow = wsC.Cells(wsC.Rows.Count, coinCol).End(xlUp).Row
+        Dim lastRow As Long: lastRow = wsC.Cells(wsC.Rows.count, coinCol).End(xlUp).Row
         For r = 2 To lastRow
             Dim cc As String, gg As String
             cc = Trim$(CStr(wsC.Cells(r, coinCol).Value))
@@ -1472,7 +1471,7 @@ Private Function BuildCoinToGroupFromCategorySheet(wsC As Worksheet) As Object
     For c = 1 To lastCol
         Dim grp As String: grp = Trim$(CStr(wsC.Cells(1, c).Value))
         If Len(grp) > 0 Then
-            Dim lastR As Long: lastR = wsC.Cells(wsC.Rows.Count, c).End(xlUp).Row
+            Dim lastR As Long: lastR = wsC.Cells(wsC.Rows.count, c).End(xlUp).Row
             For r = 2 To lastR
                 Dim coin As String: coin = Trim$(CStr(wsC.Cells(r, c).Value))
                 If Len(coin) > 0 Then d(coin) = grp
@@ -1488,17 +1487,17 @@ Private Function CreatePortfolio1Chart(wsP As Worksheet) As ChartObject
     Dim co As ChartObject
     ' Pick a default placement near the dashboard area
     Set co = wsP.ChartObjects.Add(Left:=300, Top:=20, Width:=360, Height:=220)
-    co.Name = mod_config.CHART_PORTFOLIO1
+    co.name = mod_config.CHART_PORTFOLIO1
     With co.Chart
         .ChartType = xlPie
         .HasTitle = True
-        .ChartTitle.Text = mod_config.CHART_PORTFOLIO1
+        .ChartTitle.text = mod_config.CHART_PORTFOLIO1
         ' Initialize with placeholders so chart renders
         Dim vals As Variant, names As Variant
         names = Array("BTC", "Alt.TOP", "Alt.MID", "Alt.LOW")
         vals = Array(1, 1, 1, 1)
         Dim s As Series
-        If .SeriesCollection.Count = 0 Then
+        If .SeriesCollection.count = 0 Then
             Set s = .SeriesCollection.NewSeries
         Else
             Set s = .SeriesCollection(1)
@@ -1542,7 +1541,7 @@ Private Sub UpdatePortfolioAltDailyPies(wsP As Worksheet, coinVals As Object)
             grp = ""
             If UCase$(CStr(k)) = "BTC" Then
                 grp = "BTC"
-            ElseIf Not (mapCG Is Nothing) And mapCG.Exists(CStr(k)) Then
+            ElseIf Not (mapCG Is Nothing) And mapCG.exists(CStr(k)) Then
                 grp = CStr(mapCG(CStr(k)))
             End If
             Select Case NormalizeHeader(grp)
@@ -1573,10 +1572,10 @@ Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal v
     If co Is Nothing Then
         Dim alt As Variant, alts As Variant
         Select Case chartName
-            Case "Alt.TOP": alts = Array("Portfolio_Alt.TOP_Daily", "Portfolio Alt.TOP Daily")
-            Case "Alt.MID": alts = Array("Portfolio_Alt.MID_Daily", "Portfolio Alt.MID Daily")
-            Case "Alt.LOW": alts = Array("Portfolio_Alt.LOW_Daily", "Portfolio Alt.LOW Daily")
-            Case Else:      alts = Array()
+        Case "Alt.TOP": alts = Array("Portfolio_Alt.TOP_Daily", "Portfolio Alt.TOP Daily")
+        Case "Alt.MID": alts = Array("Portfolio_Alt.MID_Daily", "Portfolio Alt.MID Daily")
+        Case "Alt.LOW": alts = Array("Portfolio_Alt.LOW_Daily", "Portfolio Alt.LOW Daily")
+        Case Else:      alts = Array()
         End Select
         For Each alt In alts
             On Error Resume Next
@@ -1584,9 +1583,9 @@ Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal v
             On Error GoTo 0
             If Not co Is Nothing Then
                 On Error Resume Next
-                co.Name = chartName
+                co.name = chartName
                 co.Chart.HasTitle = True
-                co.Chart.ChartTitle.Text = chartName
+                co.Chart.ChartTitle.text = chartName
                 On Error GoTo 0
                 Exit For
             End If
@@ -1594,14 +1593,14 @@ Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal v
     End If
     If co Is Nothing Then
         Set co = wsP.ChartObjects.Add(Left:=20, Top:=260, Width:=360, Height:=220)
-        co.Name = chartName
+        co.name = chartName
         With co.Chart
             .ChartType = xlPie
             .HasTitle = True
-            .ChartTitle.Text = chartName
+            .ChartTitle.text = chartName
             .HasLegend = True
             Dim s As Series
-            If .SeriesCollection.Count = 0 Then Set s = .SeriesCollection.NewSeries Else Set s = .SeriesCollection(1)
+            If .SeriesCollection.count = 0 Then Set s = .SeriesCollection.NewSeries Else Set s = .SeriesCollection(1)
             s.XValues = Array("Coin A", "Coin B")
             s.Values = Array(1, 1)
             s.HasDataLabels = True
@@ -1617,7 +1616,7 @@ Private Sub ApplyPerCoinPie(wsP As Worksheet, ByVal chartName As String, ByVal v
     With co.Chart
         .ChartType = xlPie
         .HasTitle = True
-        .ChartTitle.Text = chartName
+        .ChartTitle.text = chartName
         .HasLegend = True
     End With
 
@@ -1632,24 +1631,24 @@ Private Sub ApplyPerCoinSeriesToChart(ByVal ch As Chart, ByVal coinVals As Objec
         ResetPieChartToNoHoldings ch
         Exit Sub
     End If
-    If coinVals.Count = 0 Then
+    If coinVals.count = 0 Then
         ResetPieChartToNoHoldings ch
         Exit Sub
     End If
 
     Dim s As Series
-    If ch.SeriesCollection.Count = 0 Then
+    If ch.SeriesCollection.count = 0 Then
         Set s = ch.SeriesCollection.NewSeries
     Else
         Set s = ch.SeriesCollection(1)
     End If
     Dim i As Long
-    For i = ch.SeriesCollection.Count To 2 Step -1
+    For i = ch.SeriesCollection.count To 2 Step -1
         ch.SeriesCollection(i).Delete
     Next i
 
     ' Build arrays from dictionary
-    Dim n As Long: n = coinVals.Count
+    Dim n As Long: n = coinVals.count
     Dim names() As Variant, vals() As Double
     ReDim names(1 To n)
     ReDim vals(1 To n)
@@ -1688,7 +1687,7 @@ End Sub
 Private Sub ResetPieChartToNoHoldings(ByVal ch As Chart)
     On Error Resume Next
     Dim i As Long
-    For i = ch.SeriesCollection.Count To 1 Step -1
+    For i = ch.SeriesCollection.count To 1 Step -1
         ch.SeriesCollection(i).Delete
     Next i
     Dim s As Series
@@ -1726,9 +1725,9 @@ Private Sub UpdateLatestExchangeInSession(ByRef sess As Object, ByVal dt As Date
     End If
 End Sub
 
-' Convert an Order_History timestamp (UTC-4) to UTC+7
-Private Function OrderToUTC7(ByVal dt As Date) As Date
-    OrderToUTC7 = dt + (mod_config.ORDERS_TZ_OFFSET_HOURS / 24#)
+' Convert an Order_History timestamp (UTC-4) to UTC+0
+Private Function OrderToUTC(ByVal dt As Date) As Date
+    OrderToUTC = dt + (mod_config.ORDERS_TZ_OFFSET_HOURS / 24#)
 End Function
 
 
@@ -1759,12 +1758,12 @@ End Function
 
 Private Function DetectPortfolioHeaderRow(ws As Worksheet) As Long
     Dim r As Long, lastC As Long, raw As Object
-    For r = 1 To Application.Min(30, ws.Rows.Count)
-        lastC = ws.Cells(r, ws.Columns.Count).End(xlToLeft).Column
+    For r = 1 To Application.Min(30, ws.Rows.count)
+        lastC = ws.Cells(r, ws.Columns.count).End(xlToLeft).Column
         If lastC >= 1 Then
             Set raw = BuildHeaderRaw(ws, r)
-            If (raw.Exists("position") Or raw.Exists("status") Or raw.Exists("state") Or raw.Exists("pos")) _
-               And raw.Exists("coin") Then
+            If (raw.exists("position") Or raw.exists("status") Or raw.exists("state") Or raw.exists("pos")) _
+               And raw.exists("coin") Then
                 DetectPortfolioHeaderRow = r: Exit Function
             End If
         End If
@@ -1777,17 +1776,17 @@ Private Function DetectOrderHeaderRow(ws As Worksheet, Optional ByVal defaultHea
     Dim r As Long, raw As Object
 
     Set raw = BuildHeaderRaw(ws, defaultHeaderRow)
-    If (raw.Exists("date") Or raw.Exists("time") Or raw.Exists("trade date") Or raw.Exists("open time")) _
-       And (raw.Exists("coin") Or raw.Exists("symbol") Or raw.Exists("asset") Or raw.Exists("ticker")) _
-       And (raw.Exists("qty") Or raw.Exists("quantity") Or raw.Exists("amount") Or raw.Exists("size")) Then
+    If (raw.exists("date") Or raw.exists("time") Or raw.exists("trade date") Or raw.exists("open time")) _
+       And (raw.exists("coin") Or raw.exists("symbol") Or raw.exists("asset") Or raw.exists("ticker")) _
+       And (raw.exists("qty") Or raw.exists("quantity") Or raw.exists("amount") Or raw.exists("size")) Then
         DetectOrderHeaderRow = defaultHeaderRow: Exit Function
     End If
 
-    For r = 1 To Application.Min(10, ws.Rows.Count)
+    For r = 1 To Application.Min(10, ws.Rows.count)
         Set raw = BuildHeaderRaw(ws, r)
-        If (raw.Exists("date") Or raw.Exists("time") Or raw.Exists("trade date") Or raw.Exists("open time")) _
-           And (raw.Exists("coin") Or raw.Exists("symbol") Or raw.Exists("asset") Or raw.Exists("ticker")) _
-           And (raw.Exists("qty") Or raw.Exists("quantity") Or raw.Exists("amount") Or raw.Exists("size")) Then
+        If (raw.exists("date") Or raw.exists("time") Or raw.exists("trade date") Or raw.exists("open time")) _
+           And (raw.exists("coin") Or raw.exists("symbol") Or raw.exists("asset") Or raw.exists("ticker")) _
+           And (raw.exists("qty") Or raw.exists("quantity") Or raw.exists("amount") Or raw.exists("size")) Then
             DetectOrderHeaderRow = r: Exit Function
         End If
     Next r
@@ -1797,7 +1796,7 @@ End Function
 
 Private Sub EnsureMapped(ByVal d As Object, ByVal key As String)
     If d Is Nothing Then Err.Raise 1004, , "Internal mapping is Nothing."
-    If Not d.Exists(key) Then Err.Raise 1004, , "Missing header (one of): " & key
+    If Not d.exists(key) Then Err.Raise 1004, , "Missing header (one of): " & key
     If CLng(d(key)) < 1 Then Err.Raise 1004, , "Invalid column index for key: " & key
 End Sub
 
@@ -1807,7 +1806,7 @@ End Sub
 
 Private Function BuildHeaderRaw(ByVal ws As Worksheet, ByVal headerRow As Long) As Object
     Dim d As Object: Set d = CreateObject("Scripting.Dictionary"): d.CompareMode = vbTextCompare
-    Dim lastCol As Long: lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+    Dim lastCol As Long: lastCol = ws.Cells(headerRow, ws.Columns.count).End(xlToLeft).Column
     If lastCol < 1 Then lastCol = 1
     Dim c As Long, key As String
     For c = 1 To lastCol
@@ -1840,12 +1839,12 @@ Private Function MapPortfolioHeaders(wsP As Worksheet, ByVal headerRow As Long) 
     map("%NAV") = RequireAnyOptional(raw, Array("%nav", "nav%", "% of nav", "% nav", "weight", "%weight", "nav weight"))
     map("storage") = RequireAnyOptional(raw, Array("storage", "exchange", "venue", "wallet"))
 
-    If Not map.Exists("market price") Then map("market price") = 0
-    If Not map.Exists("available balance") Then map("available balance") = 0
-    If Not map.Exists("profit") Then map("profit") = 0
-    If Not map.Exists("%PnL") Then map("%PnL") = 0
-    If Not map.Exists("storage") Then map("storage") = 0
-    If Not map.Exists("%NAV") Then map("%NAV") = 0
+    If Not map.exists("market price") Then map("market price") = 0
+    If Not map.exists("available balance") Then map("available balance") = 0
+    If Not map.exists("profit") Then map("profit") = 0
+    If Not map.exists("%PnL") Then map("%PnL") = 0
+    If Not map.exists("storage") Then map("storage") = 0
+    If Not map.exists("%NAV") Then map("%NAV") = 0
 
     Set MapPortfolioHeaders = map
 End Function
@@ -1864,10 +1863,10 @@ Private Function MapOrderHeaders(ByVal ws As Worksheet, ByVal headerRow As Long)
     map("Total") = RequireAnyOptional(raw, Array("total", "amount", "gross", "value"))
 
 
-    If Not map.Exists("Price") Then map("Price") = 0
-    If Not map.Exists("Fee") Then map("Fee") = 0
-    If Not map.Exists("Exchange") Then map("Exchange") = 0
-    If Not map.Exists("Total") Then map("Total") = 0
+    If Not map.exists("Price") Then map("Price") = 0
+    If Not map.exists("Fee") Then map("Fee") = 0
+    If Not map.exists("Exchange") Then map("Exchange") = 0
+    If Not map.exists("Total") Then map("Total") = 0
 
     Set MapOrderHeaders = map
 End Function
@@ -1892,7 +1891,7 @@ Private Function RequireAny(ByVal dict As Object, ByVal aliases As Variant) As L
     Dim i As Long, k As String
     For i = LBound(aliases) To UBound(aliases)
         k = NormalizeHeader(CStr(aliases(i)))
-        If dict.Exists(k) Then RequireAny = dict(k): Exit Function
+        If dict.exists(k) Then RequireAny = dict(k): Exit Function
     Next i
     Err.Raise 1004, , "Missing header (one of): " & JoinAliases(aliases)
 End Function
@@ -1901,7 +1900,7 @@ Private Function RequireAnyOptional(ByVal dict As Object, ByVal aliases As Varia
     Dim i As Long, k As String
     For i = LBound(aliases) To UBound(aliases)
         k = NormalizeHeader(CStr(aliases(i)))
-        If dict.Exists(k) Then RequireAnyOptional = dict(k): Exit Function
+        If dict.exists(k) Then RequireAnyOptional = dict(k): Exit Function
     Next i
     RequireAnyOptional = 0
 End Function
@@ -1939,7 +1938,7 @@ Private Function LastRowIn(ws As Worksheet, ByVal col As Long, ByVal headerRow A
     ElseIf Application.WorksheetFunction.CountA(ws.Columns(col)) = 0 Then
         LastRowIn = headerRow
     Else
-        LastRowIn = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+        LastRowIn = ws.Cells(ws.Rows.count, col).End(xlUp).Row
     End If
 End Function
 
@@ -1988,11 +1987,11 @@ Private Function GetOrderQtyNumberFormat() As String
     Dim hdrO As Long: hdrO = DetectOrderHeaderRow(wsO, mod_config.ORDERS_HEADER_ROW_DEFAULT)
     If hdrO = 0 Then GoTo Done
     Dim ordCols As Object: Set ordCols = MapOrderHeaders(wsO, hdrO)
-    If Not ordCols.Exists("Qty") Then GoTo Done
+    If Not ordCols.exists("Qty") Then GoTo Done
     Dim c As Long: c = CLng(ordCols("Qty"))
     If c <= 0 Then GoTo Done
     ' Prefer the first data cell's NumberFormat below the header if available
-    Dim lastR As Long: lastR = wsO.Cells(wsO.Rows.Count, c).End(xlUp).Row
+    Dim lastR As Long: lastR = wsO.Cells(wsO.Rows.count, c).End(xlUp).Row
     Dim r As Long
     For r = hdrO + 1 To lastR
         If IsNumeric(wsO.Cells(r, c).Value) Then
@@ -2032,7 +2031,7 @@ Private Function ParseTickerPriceFromJson(ByVal s As String) As Double
     i = InStr(i, s, ":", vbTextCompare): If i = 0 Then Exit Function
     i = InStr(i, s, """", vbTextCompare): If i = 0 Then Exit Function
     j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then Exit Function
-    ParseTickerPriceFromJson = Val(Mid$(s, i + 1, j - i - 1))
+    ParseTickerPriceFromJson = val(Mid$(s, i + 1, j - i - 1))
 End Function
 
 ' Parse first kline's close from Binance klines JSON
@@ -2042,7 +2041,7 @@ Private Function ParseFirstKlineCloseFromJson(ByVal s As String) As Double
     b = InStr(a + 2, s, "]]", vbTextCompare): If b = 0 Then Exit Function
     inner = Mid$(s, a + 2, b - a - 2)
     parts = Split(inner, ",")
-    If UBound(parts) >= 4 Then ParseFirstKlineCloseFromJson = Val(Replace$(Replace$(parts(4), """", ""), " ", ""))
+    If UBound(parts) >= 4 Then ParseFirstKlineCloseFromJson = val(Replace$(Replace$(parts(4), """", ""), " ", ""))
 End Function
 
 Private Function MapCoinToBinanceSymbol(ByVal coin As String) As String
@@ -2116,7 +2115,7 @@ End Function
 
 
 ' ========================= CUTOFF PARSER HELPERS =============================
-' Read cutoff from Position!B3 (UTC+7). Returns True if a valid datetime was parsed.
+' Read cutoff from Position!B3 (UTC+0). Returns True if a valid datetime was parsed.
 Private Function GetCutoffFromPositionB3(ByRef outDt As Date) As Boolean
     Dim v As Variant
     v = ThisWorkbook.Worksheets(mod_config.SHEET_PORTFOLIO).Range(mod_config.CELL_CUTOFF).Value
@@ -2218,7 +2217,7 @@ Public Sub Take_Daily_Snapshot()
     ' Ensure target sheet exists with correct name
     Set wsS = SheetByName(mod_config.SHEET_SNAPSHOT)
     If wsS Is Nothing Then
-        Set wsS = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        Set wsS = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.count))
         wsS.name = mod_config.SHEET_SNAPSHOT
     End If
 
@@ -2237,7 +2236,7 @@ Public Sub Take_Daily_Snapshot()
     DoEvents
     On Error GoTo Fail
 
-    ' Snapshot date from Position!B3 (UTC+7); fallback to today if invalid
+    ' Snapshot date from Position!B3 (UTC+0); fallback to today if invalid
     Dim snapDt As Date
     If Not GetCutoffFromPositionB3(snapDt) Then snapDt = Date
     snapDt = DateValue(snapDt) ' only date
@@ -2289,7 +2288,7 @@ Public Sub Take_Daily_Snapshot()
                 End If
 
                 If availBal > 0 Then
-                    If holdDict.Exists(coin) Then
+                    If holdDict.exists(coin) Then
                         holdDict(coin) = holdDict(coin) + availBal
                     Else
                         holdDict(coin) = availBal
@@ -2301,8 +2300,8 @@ Public Sub Take_Daily_Snapshot()
 
     ' Compose "COIN: value" string with thousand separators (sorted by value desc)
     Dim holdingsStr As String: holdingsStr = ""
-    If holdDict.Count > 0 Then
-        Dim nHold As Long: nHold = holdDict.Count
+    If holdDict.count > 0 Then
+        Dim nHold As Long: nHold = holdDict.count
         Dim keysArr() As Variant, valsArr() As Double
         ReDim keysArr(1 To nHold)
         ReDim valsArr(1 To nHold)
@@ -2345,18 +2344,18 @@ Public Sub Take_Daily_Snapshot()
     Dim gVals As Object: Set gVals = CreateObject("Scripting.Dictionary"): gVals.CompareMode = vbTextCompare
     gVals("BTC") = 0#: gVals("Alt.TOP") = 0#: gVals("Alt.MID") = 0#: gVals("Alt.LOW") = 0#
 
-    If holdDict.Count > 0 Then
+    If holdDict.count > 0 Then
         Dim ck As Variant, grp As String, val As Double
         For Each ck In holdDict.Keys
             val = CDbl(holdDict(ck))
             If UCase$(CStr(ck)) = "BTC" Then
                 grp = "BTC"
-            ElseIf Not (coinToGroup Is Nothing) And coinToGroup.Exists(CStr(ck)) Then
+            ElseIf Not (coinToGroup Is Nothing) And coinToGroup.exists(CStr(ck)) Then
                 grp = CStr(coinToGroup(ck))
             Else
                 grp = "Alt.LOW"
             End If
-            If gVals.Exists(grp) Then gVals(grp) = gVals(grp) + val
+            If gVals.exists(grp) Then gVals(grp) = gVals(grp) + val
         Next ck
     End If
 
@@ -2381,7 +2380,7 @@ Public Sub Take_Daily_Snapshot()
 
     ' ---------- UPSERT: t??????m d??????ng c?????? Date = snapDt ----------
     Dim lastRow As Long, writeRow As Long, found As Boolean
-    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    lastRow = wsS.Cells(wsS.Rows.count, 1).End(xlUp).Row
     found = False
     If lastRow >= 2 Then
         For r = 2 To lastRow
@@ -2413,7 +2412,7 @@ Public Sub Take_Daily_Snapshot()
     wsS.Cells(writeRow, 12).Value = holdingsStr
 
     ' ---------- Sort by Date ascending ----------
-    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    lastRow = wsS.Cells(wsS.Rows.count, 1).End(xlUp).Row
     If lastRow > 2 Then
         wsS.Sort.SortFields.Clear
         wsS.Sort.SortFields.Add key:=wsS.Range("A2:A" & lastRow), _
@@ -2559,7 +2558,7 @@ Private Function GetOkxRealtimePrice(ByVal instId As String) As Variant
     i = InStr(i, s, ":", vbTextCompare): If i = 0 Then GoTo Fail
     i = InStr(i, s, """", vbTextCompare): If i = 0 Then GoTo Fail
     j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then GoTo Fail
-    GetOkxRealtimePrice = Val(Mid$(s, i + 1, j - i - 1))
+    GetOkxRealtimePrice = val(Mid$(s, i + 1, j - i - 1))
     Exit Function
 Fail:
     GetOkxRealtimePrice = Empty
@@ -2577,7 +2576,7 @@ Private Function GetBybitRealtimePrice(ByVal symbol As String) As Variant
     i = InStr(i, s, ":", vbTextCompare): If i = 0 Then GoTo Fail
     i = InStr(i, s, """", vbTextCompare): If i = 0 Then GoTo Fail
     j = InStr(i + 1, s, """", vbTextCompare): If j = 0 Then GoTo Fail
-    GetBybitRealtimePrice = Val(Mid$(s, i + 1, j - i - 1))
+    GetBybitRealtimePrice = val(Mid$(s, i + 1, j - i - 1))
     Exit Function
 Fail:
     GetBybitRealtimePrice = Empty
@@ -2617,7 +2616,7 @@ Public Sub Update_All_Snapshot()
 
     Dim exists As Object: Set exists = CreateObject("Scripting.Dictionary")
     exists.CompareMode = vbTextCompare
-    Dim lastRow As Long: lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    Dim lastRow As Long: lastRow = wsS.Cells(wsS.Rows.count, 1).End(xlUp).Row
     Dim r As Long
     For r = 2 To lastRow
         If IsDate(wsS.Cells(r, 1).Value) Then exists(AddDateKey(DateValue(wsS.Cells(r, 1).Value))) = True
@@ -2629,7 +2628,7 @@ Public Sub Update_All_Snapshot()
     Dim d As Date
     gSuppressPositionMsg = True
     For d = startDate To cutoff
-        If Not exists.Exists(AddDateKey(d)) Then
+        If Not exists.exists(AddDateKey(d)) Then
             wsP.Range(mod_config.CELL_CUTOFF).Value = d
             Update_Capital_and_Position
             Take_Daily_Snapshot
@@ -2668,7 +2667,7 @@ Private Function Backfill3MSnapshots(wsP As Worksheet, ByVal cutoffDate As Date)
     exists.CompareMode = vbTextCompare
 
     Dim lastRow As Long, r As Long
-    lastRow = wsS.Cells(wsS.Rows.Count, 1).End(xlUp).Row
+    lastRow = wsS.Cells(wsS.Rows.count, 1).End(xlUp).Row
     For r = 2 To lastRow
         If IsDate(wsS.Cells(r, 1).Value) Then exists(AddDateKey(DateValue(wsS.Cells(r, 1).Value))) = True
     Next r
@@ -2676,9 +2675,9 @@ Private Function Backfill3MSnapshots(wsP As Worksheet, ByVal cutoffDate As Date)
     Dim missing As Collection: Set missing = New Collection
     Dim d As Date
     For d = startDate To cutoffDay
-        If Not exists.Exists(AddDateKey(d)) Then missing.Add d
+        If Not exists.exists(AddDateKey(d)) Then missing.Add d
     Next d
-    If missing.Count = 0 Then Exit Function
+    If missing.count = 0 Then Exit Function
 
     Dim formShown As Boolean: formShown = False
     On Error Resume Next
@@ -2745,6 +2744,11 @@ End Function
 Private Function AddDateKey(ByVal d As Date) As String
     AddDateKey = Format$(d, "yyyy-mm-dd")
 End Function
+
+
+
+
+
 
 
 
