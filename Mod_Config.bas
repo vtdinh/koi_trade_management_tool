@@ -1,6 +1,6 @@
 Attribute VB_Name = "mod_config"
 Option Explicit
-' Last Modified (UTC): 2025-09-29T13:30:00Z
+' Last Modified (UTC): 2025-10-19T00:20:00Z
 
 ' ===================== DASHBOARD: NAV Drawdown Text =====================
 ' Positioning and style config for the Max Drawdown textbox on NAV chart
@@ -93,6 +93,12 @@ Public Const EPS_CLOSE As Double = 0.0001
 Public Const SNAPSHOT_DATE_FMT   As String = "yyyy-mm-dd"
 Public Const POS_DATE_AXIS_FMT  As String = "dd/mm/yy"          ' Position chart axis (e.g., 01/09/25)
 Public Const SNAPSHOT_NUMBER_FMT As String = "#,##0"
+
+' ===================== POSITION: NAV 3M SCALING =====================
+' Y-axis scaling bounds for the Position sheet "NAV 3M" chart
+' Margin percent around 3M min/max (e.g., 0.05 = 5%) and rounding unit
+Public Const NAV_3M_MARGIN_PCT As Double = 0.05
+Public Const NAV_3M_Y_ROUND_UNIT As Double = 500#
 
 ' Colors (as helpers returning Long)
 Public Function COLOR_PNL_POSITIVE() As Long

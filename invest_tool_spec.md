@@ -168,6 +168,9 @@ Progress forms (modeless, auto-closed before final message)
   - NAV_MDD_ALIGN: "Center" | "Left" | "Right"
 
 ## Metrics & Formulas
+- Position table headers
+  - Uses tolerant header detection. Canonical column name is "Avg buy price".
+  - Legacy compatibility: existing workbooks with headers "Avg. price" or "Avg. cost" are still accepted by header mapping.
 - Time & Cutoff
   - Cutoff cell `Position!B3` is UTC+0. A date-only value is treated as end-of-day 23:59:59 UTC+0.
   - Orders are already UTC+0; filtering uses the cutoff datetime (<= cutoff).

@@ -1,5 +1,5 @@
 Option Explicit
-' Last Modified (UTC): 2025-10-19T00:15:00Z
+' Last Modified (UTC): 2025-10-19T00:41:00Z
 
 ' Batch control: suppress message boxes from Update_Capital_and_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -48,7 +48,10 @@ Public Sub Refresh_Daily_Data()
         End If
     End If
 
-    Update_Capital_and_Position
+    ' Optimization: if cutoff is today, skip this first rebuild and do the yesterday+today sequence below
+    If Not (cutoffValid And DateValue(cutoffDay) = Date) Then
+        Update_Capital_and_Position
+    End If
 
     If cutoffValid And Not wsP Is Nothing Then
         snapshotActive = True
@@ -164,7 +167,7 @@ Private Sub Update_Capital_and_Position()
     EnsureMapped portCols, "Close date"
     EnsureMapped portCols, "Buy Qty"
     EnsureMapped portCols, "Cost"
-    EnsureMapped portCols, "Avg. cost"
+    EnsureMapped portCols, "Avg buy price"
     EnsureMapped portCols, "sell qty"
     EnsureMapped portCols, "sell proceeds"
     EnsureMapped portCols, "avg sell price"
@@ -455,7 +458,7 @@ Private Sub Update_Capital_and_Position()
         WriteCellSafe wsP, rowOut, portCols("Open date"), ss("OpenDate")
         If Not IsEmpty(ss("CloseDate")) Then WriteCellSafe wsP, rowOut, portCols("Close date"), ss("CloseDate")
         WriteCellSafe wsP, rowOut, portCols("Cost"), ss("Cost")
-        WriteCellSafe wsP, rowOut, portCols("Avg. cost"), avgBuy
+        WriteCellSafe wsP, rowOut, portCols("Avg buy price"), avgBuy
         WriteCellSafe wsP, rowOut, portCols("sell proceeds"), ss("SellProceeds")
         WriteCellSafe wsP, rowOut, portCols("avg sell price"), avgSell
 
@@ -589,9 +592,11 @@ Private Sub Update_Capital_and_Position()
                 wsP.Cells(rFill, portCols("%NAV")).Value = 0#
             End If
         Next rFill
-        ' Sort entire block by %NAV desc
+        ' Sort entire block by %NAV desc (only the actual table columns)
         Dim sortRange As Range, keyRange As Range
-        Set sortRange = wsP.Range(wsP.Cells(OUT_START, 1), wsP.Cells(rowOut - 1, MaxCol(portCols)))
+        Dim startCol As Long: startCol = MinCol(portCols)
+        Dim endCol As Long: endCol = MaxCol(portCols)
+        Set sortRange = wsP.Range(wsP.Cells(OUT_START, startCol), wsP.Cells(rowOut - 1, endCol))
         Set keyRange = wsP.Range(wsP.Cells(OUT_START, portCols("%NAV")), wsP.Cells(rowOut - 1, portCols("%NAV")))
         On Error Resume Next
         sortRange.Sort Key1:=keyRange, Order1:=xlDescending, Header:=xlNo
@@ -635,7 +640,8 @@ AfterPriceCheck:
     checkCapitalRuleViolation
     On Error GoTo 0
     If cutoffEnabled Then
-        If gSkipAutoSnapshot Or dayCutoffUTC = todayUTC Then
+        ' Auto-snapshot only when not skipping and cutoff is a past day
+        If (Not gSkipAutoSnapshot) And (dayCutoffUTC < todayUTC) Then
             Dim savedSuppressSnapshot As Boolean
             savedSuppressSnapshot = gSuppressPositionMsg
             gSuppressPositionMsg = True
@@ -1144,20 +1150,20 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     End With
     On Error GoTo 0
 
-    ' ----- 500-rounded Y-axis bounds based on 3M NAV range
+    ' ----- Y-axis bounds for NAV 3M using config margins and rounding unit
     Dim yMin As Double, yMax As Double, unit As Double
-    unit = 500#
+    unit = mod_config.NAV_3M_Y_ROUND_UNIT
     If navATL > 0 Then
-        yMin = navATL * 0.95   ' 5% margin below
+        yMin = navATL * (1# - mod_config.NAV_3M_MARGIN_PCT)   ' margin below
     Else
         yMin = 0#
     End If
     If navATH > 0 Then
-        yMax = navATH * 1.05   ' 5% margin above
+        yMax = navATH * (1# + mod_config.NAV_3M_MARGIN_PCT)   ' margin above
     Else
         yMax = 1#
     End If
-    ' Round to 500 boundaries: floor for min, ceiling for max
+    ' Round to configured boundaries: floor for min, ceiling for max
     yMin = unit * Int(yMin / unit)
     yMax = unit * Int((yMax + unit - 1#) / unit)
     If yMax <= yMin Then yMax = yMin + unit
@@ -1873,7 +1879,11 @@ Private Function MapPortfolioHeaders(wsP As Worksheet, ByVal headerRow As Long) 
     map("Close date") = RequireAny(raw, Array("close date", "close"))
     map("Buy Qty") = RequireAny(raw, Array("buy qty", "buy quantity", "buyqty", "buy", "buy q"))
     map("Cost") = RequireAny(raw, Array("cost", "buy cost", "total cost"))
-    map("Avg. cost") = RequireAny(raw, Array("avg cost", "avg. cost", "average cost"))
+    ' Canonical key renamed to "Avg buy price" (accept legacy names)
+    map("Avg buy price") = RequireAny(raw, Array( _
+        "avg buy price", "avg. buy price", "average buy price", _
+        "avg price", "avg. price", "average price", _
+        "avg cost", "avg. cost", "average cost"))
     map("sell qty") = RequireAny(raw, Array("sell qty", "sell quantity", "sellqty", "sold qty", "sell q"))
     map("sell proceeds") = RequireAny(raw, Array("sell proceeds", "net proceeds", "sell money", "sell value"))
     map("avg sell price") = RequireAny(raw, Array("avg sell price", "average sell price"))
@@ -2000,7 +2010,8 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
 
     ws.Range(ws.Cells(outStart, portCols("Cost")), ws.Cells(lastRow, portCols("Cost"))).NumberFormat = mod_config.MONEY_FMT
     ws.Range(ws.Cells(outStart, portCols("sell proceeds")), ws.Cells(lastRow, portCols("sell proceeds"))).NumberFormat = mod_config.MONEY_FMT
-    ws.Range(ws.Cells(outStart, portCols("Avg. cost")), ws.Cells(lastRow, portCols("Avg. cost"))).NumberFormat = mod_config.PRICE_FMT
+    If portCols("Avg buy price") > 0 Then _
+        ws.Range(ws.Cells(outStart, portCols("Avg buy price")), ws.Cells(lastRow, portCols("Avg buy price"))).NumberFormat = mod_config.PRICE_FMT
     If portCols("available balance") > 0 Then _
         ws.Range(ws.Cells(outStart, portCols("available balance")), ws.Cells(lastRow, portCols("available balance"))).NumberFormat = mod_config.MONEY_FMT
     If portCols("profit") > 0 Then _
@@ -2016,6 +2027,28 @@ Private Sub SafeFormat(ws As Worksheet, portCols As Object, lastRow As Long, ByV
 
     ws.Range(ws.Cells(outStart, portCols("Open date")), ws.Cells(lastRow, portCols("Open date"))).NumberFormat = mod_config.DATE_FMT
     ws.Range(ws.Cells(outStart, portCols("Close date")), ws.Cells(lastRow, portCols("Close date"))).NumberFormat = mod_config.DATE_FMT
+
+    ' Align and color: force black font and right alignment for numeric columns
+    Dim keys As Variant, iKey As Long, cFmt As Long
+    keys = Array("Buy Qty", "sell qty", "available qty", _
+                 "Cost", "Avg buy price", "market price", _
+                 "sell proceeds", "avg sell price", _
+                 "available balance", "profit", "%PnL", "%NAV")
+    For iKey = LBound(keys) To UBound(keys)
+        If portCols.Exists(keys(iKey)) Then
+            cFmt = CLng(portCols(keys(iKey)))
+            If cFmt > 0 Then
+                ' Force entire column alignment to the right (stronger than per-cell)
+                ws.Columns(cFmt).HorizontalAlignment = xlHAlignRight
+                ' Keep conditional formatting colors on PnL/%PnL, set other numeric to black
+                Dim kName As String
+                kName = LCase$(CStr(keys(iKey)))
+                If kName <> "profit" And kName <> "%pnl" Then
+                    ws.Range(ws.Cells(outStart, cFmt), ws.Cells(lastRow, cFmt)).Font.Color = vbBlack
+                End If
+            End If
+        End If
+    Next iKey
 
     ' Respect config: keep existing column widths unless explicitly allowed
     If mod_config.AUTOFIT_POSITION_COLUMNS Then
