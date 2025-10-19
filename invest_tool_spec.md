@@ -1,5 +1,4 @@
-﻿# KOI Trading Portfolio Workbook Spec (v2.7.0)
-Generated: 2025-09-10
+﻿# Koi+Stock Investment Workbook Spec 
 
 ## Overview
 Excel/VBA workbook to aggregate crypto orders into positions, P&L, dashboard totals, and portfolio charts.
@@ -10,6 +9,11 @@ Core macros
 - Take_Daily_Snapshot: upserts a row per date into Daily_Snapshot (see layout below).
 - Update_All_Snapshot: fills all missing daily snapshot rows from Daily_Snapshot!A2 (start date) to Position!B3 (cutoff). For each missing date it sets the cutoff, rebuilds Position (silent), writes the snapshot, then restores the original cutoff.
 - Update_Dashboard: builds Dashboard charts (NAV with drawdown annotation, PnL, Deposit & Withdraw combined) for the date range on Dashboard!B2:B3.
+
+Progress forms (modeless, auto-closed before final message)
+- Update_Capital_and_Position: shows a progress form titled "Updating Capital and Position..." during the rebuild.
+- Take_Daily_Snapshot: shows a progress form titled "Updating snapshot..." while taking the snapshot.
+- Backfill (3M helper within Refresh_Daily_Data): shows a progress form titled "Updating missing snapshots..." while filling gaps.
 
 ## Sheets & Key Cells
 ### Position (SHEET_PORTFOLIO)
@@ -163,7 +167,74 @@ Core macros
   - NAV_MDD_WIDTH / NAV_MDD_HEIGHT
   - NAV_MDD_ALIGN: "Center" | "Left" | "Right"
 
+## Metrics & Formulas
+- Time & Cutoff
+  - Cutoff cell `Position!B3` is UTC+0. A date-only value is treated as end-of-day 23:59:59 UTC+0.
+  - Orders are already UTC+0; filtering uses the cutoff datetime (<= cutoff).
+
+- Orders → Cash legs (prefer "Total" when present)
+  - If `Total` column is present and numeric on the row, use it for cash math; else:
+    - Buy cash  = Qty*Price + Fee
+    - Sell cash = Qty*Price - Fee
+  - Aggregates to the cutoff:
+    - Total deposit  = sum of DEPOSIT amounts
+    - Total withdraw = sum of WITHDRAW amounts
+    - Total buy      = sum of BUY cash legs
+    - Total sell     = sum of SELL cash legs
+
+- Position Totals (Position sheet)
+  - Holdings value (Coin) = sum of Available Balance for Open rows, where per row:
+    - Available Balance =
+      - If the `Available balance` column exists and is numeric: that value
+      - Else: `Available qty` * `Market price`
+  - Cash = (Total deposit + Total sell) - (Total buy + Total withdraw)
+  - NAV  = Cash + Coin
+  - Total profit = NAV - (Total deposit - Total withdraw)
+  - Rounding/formatting: totals use integer money formats; NAV is truncated/rounded to 0 decimals per code and formatted with `MONEY_FMT`.
+
+- Per-row PnL (Position table rows)
+  - Closed rows: Profit = Sell proceeds - Cost
+  - Open rows:   Profit = Sell proceeds + Available Balance - Cost
+  - %PnL = Profit / Cost when Cost > 0, else blank; formatted with `PCT_FMT`.
+
+- %NAV column (Position table rows)
+  - Only meaningful for Open rows with AvailableQty > 0 and numeric Available Balance.
+  - %NAV = Available Balance / total NAV (0 when NAV ≈ 0); formatted with `PCT_FMT`.
+  - After computing, rows are sorted by %NAV descending in the output block.
+
+- Allocation Metrics (Position sheet cells)
+  - Build holdings by coin from Open rows’ Available Balance (see above).
+  - Map coins to groups using the Category sheet (accepts both mapping and multi-column layouts; tolerant group name comparison).
+  - %Coin = Coin / NAV (0 when NAV ≈ 0)
+  - %BTC  = BTC group value / Coin (0 when Coin ≈ 0)
+  - %Alt.TOP = Alt.TOP value / Coin; Count Alt.TOP = number of Alt.TOP coins with value > `EPS_CLOSE`
+  - %Alt.MID = Alt.MID value / Coin; Count Alt.MID = number of Alt.MID coins with value > `EPS_CLOSE`
+  - %Alt.LOW = Alt.LOW value / Coin; Count Alt.LOW = number of Alt.LOW coins with value > `EPS_CLOSE`
+  - Percent cells are formatted using `PCT_FMT`.
+  - Missing Category entries: if a coin is not found in the Category mapping (and is not BTC), the run appends a warning to the final message: `Warning: "<COIN>" is not in the Category` (one line per coin).
+
+- NAV Metrics (3M window on Position)
+  - Window: from 3 months prior to the cutoff day through the cutoff day.
+  - Data source: `Daily_Snapshot` rows within the window; if the cutoff day’s snapshot row is missing, the live NAV from the current rebuild is included for ATH/ATL consideration.
+  - NAV ATH/ATL cells hold the window’s max/min NAV (integer money convention).
+  - Drawdown cell = max(0, (ATH - NAV_at_cutoff) / ATH). If `NAV_DD_USE_TRUNCATED` is True, ATH and NAV_at_cutoff are truncated to 0 decimals before computing. If the result ≤ `NAV_DD_TOLERANCE_PCT`, show 0%. Formatted with `PCT_FMT`.
+
+- Daily_Snapshot row (A:L)
+  - Date = cutoff date (UTC+0, date only)
+  - Cash, Coin, NAV, Total deposit, Total withdraw, Total profit = values from Position totals (integer money)
+  - BTC, Alt.TOP, Alt.MID, Alt.LOW = group totals (money) computed from holdings and Category mapping
+  - Holdings = text string of per-coin holdings and values (used to recompute category splits when preferred)
+  - UPSERT by Date; sheet sorted ascending by Date; formats per config: `SNAPSHOT_DATE_FMT` and `SNAPSHOT_NUMBER_FMT`.
+
+- Capital rule check (Position sheet)
+  - Compare `CELL_NAV` (calculated) vs `CELL_NAV_REAL` (user input). If `abs(calc - real) / abs(real) >= CAPITAL_RULE_DIFF_THRESHOLD_PCT`, write a warning message to `CELL_NAV_ACTION`.
+
 ## Version History
+- v2.7.1:
+  - Progress UI consistency on Position sheet: modeless progress forms displayed during long operations and always closed before any final MsgBox.
+    - Update_Capital_and_Position: "Updating Capital and Position..."
+    - Take_Daily_Snapshot: "Updating snapshot..."
+    - 3M backfill helper: "Updating missing snapshots..."
 - v2.7.0:
   - Pricing priority: Binance first (D1 close/realtime), then Exchange-specific pricing (OKX/Bybit) using daily close for past cutoffs and realtime for today. If both fail the macro stops with the fetch error.
   - Position charts: added three daily pies showing per-coin breakdowns within Alt groups. ChartObject names are now short: `Alt.TOP`, `Alt.MID`, `Alt.LOW` (legacy names `Portfolio_Alt.*_Daily` are auto-renamed in code).

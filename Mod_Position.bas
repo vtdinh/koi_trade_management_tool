@@ -1,14 +1,23 @@
 Option Explicit
-' Last Modified (UTC): 2025-09-30T01:12:00Z
+' Last Modified (UTC): 2025-10-19T00:00:00Z
 
 ' Batch control: suppress message boxes from Update_Capital_and_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
 Private gSkipAutoSnapshot As Boolean
 Private gPriceFetchFailed As Boolean
 Private gInNav3MBackfill As Boolean
+' Track coins missing from Category mapping during this run
+Private gUnknownCategory As Object
 
 ' Uses global config from mod_config.bas
 Private Const OUTPUT_OFFSET_ROWS As Long = 1
+
+' Close any modeless progress form before showing final messages
+Private Sub CloseProgressForm()
+    On Error Resume Next
+    Unload MsgForm
+    On Error GoTo 0
+End Sub
 
 Public Sub Refresh_Daily_Data()
     On Error GoTo Fail
@@ -77,8 +86,26 @@ Clean:
     End If
 
     If Len(errMsg) = 0 Then
-        If Not gSuppressPositionMsg Then MsgBox "Capital, portfolio and position are updated.", vbInformation
+        CloseProgressForm
+        If Not gSuppressPositionMsg Then
+            Dim finalMsg As String
+            finalMsg = "Capital, portfolio and position are updated."
+            On Error Resume Next
+            If Not (gUnknownCategory Is Nothing) Then
+                If gUnknownCategory.count > 0 Then
+                    Dim warn As String, coinNm As Variant
+                    warn = vbNullString
+                    For Each coinNm In gUnknownCategory.Keys
+                        warn = warn & vbCrLf & "Warning: """ & CStr(coinNm) & """ is not in the Category"
+                    Next coinNm
+                    If Len(warn) > 0 Then finalMsg = finalMsg & warn
+                End If
+            End If
+            On Error GoTo 0
+            MsgBox finalMsg, vbInformation
+        End If
     Else
+        CloseProgressForm
         MsgBox "Error: " & errMsg, vbExclamation
     End If
     Exit Sub
@@ -98,6 +125,12 @@ Private Sub Update_Capital_and_Position()
 
     Application.ScreenUpdating = False
     Application.EnableEvents = False
+
+    ' Reset unknown-category tracker for this rebuild
+    On Error Resume Next
+    Set gUnknownCategory = CreateObject("Scripting.Dictionary")
+    If Not gUnknownCategory Is Nothing Then gUnknownCategory.CompareMode = vbTextCompare
+    On Error GoTo Fail
 
     Dim formShown As Boolean: formShown = False
     On Error Resume Next
@@ -615,13 +648,17 @@ AfterPriceCheck:
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    ' Ensure any progress form is closed before returning
+    On Error Resume Next: Unload MsgForm: On Error GoTo 0
     Exit Sub
 
 Fail:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    ' Close progress form before showing error
+    On Error Resume Next: Unload MsgForm: On Error GoTo 0
     MsgBox "Error: " & Err.Description, vbExclamation
-End Sub
+    End Sub
 
 ' =============================================================================
 ' ======= INDEPENDENT MACRO: UPDATE MARKET PRICE (OPEN ONLY) ==================
@@ -666,7 +703,7 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     Dim formShown As Boolean: formShown = False
     On Error Resume Next
     With MsgForm
-        .Label1.Caption = "Updating Capital and Position..."
+        .Label1.Caption = "Updating snapshot..."
         .Label1.WordWrap = True
         .StartUpPosition = 1
         .Show vbModeless
@@ -718,6 +755,7 @@ Public Sub Update_MarketPrice_ByCutoff_OpenOnly_Simple()
     wsP.Range(wsP.Cells(OUT_START, portCols("market price")), wsP.Cells(lastR, portCols("market price"))).NumberFormat = mod_config.PRICE_FMT
     On Error GoTo 0
 
+    CloseProgressForm
     MsgBox "Market price updated for Open rows (UTC D1 close / realtime).", vbInformation
     GoTo Clean
 
@@ -725,6 +763,7 @@ PriceFail_MP:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
     If Len(priceErrMsg) > 0 Then
+        CloseProgressForm
         MsgBox priceErrMsg, vbExclamation
     End If
     gPriceFetchFailed = False
@@ -733,11 +772,14 @@ PriceFail_MP:
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    ' Always close the progress form at the end
+    CloseProgressForm
     Exit Sub
 
 Fail:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    CloseProgressForm
     MsgBox "Error: " & Err.Description, vbExclamation
 End Sub
 
@@ -788,7 +830,12 @@ Private Sub UpdateAllocationMetrics(wsP As Worksheet, ByVal coinVals As Object, 
                 vBTC = vBTC + v
             Else
                 grp = vbNullString
-                If Not (mapCG Is Nothing) And mapCG.exists(name) Then grp = CStr(mapCG(name))
+                If Not (mapCG Is Nothing) And mapCG.exists(name) Then
+                    grp = CStr(mapCG(name))
+                Else
+                    ' Not found in Category mapping -> record warning
+                    If Not (gUnknownCategory Is Nothing) Then gUnknownCategory(name) = 1
+                End If
                 Select Case NormalizeHeader(grp)
                     Case NormalizeHeader("Alt.TOP"): vTop = vTop + v: cTop = cTop + 1
                     Case NormalizeHeader("Alt.MID"): vMid = vMid + v: cMid = cMid + 1
@@ -2227,7 +2274,7 @@ Public Sub Take_Daily_Snapshot()
     Dim formShown As Boolean: formShown = False
     On Error Resume Next
     With MsgForm
-        .Label1.Caption = "Updating Capital and Position..."
+        .Label1.Caption = "Updating snapshot..."
         .Label1.WordWrap = True
         .StartUpPosition = 1
         .Show vbModeless
@@ -2428,17 +2475,21 @@ Public Sub Take_Daily_Snapshot()
 
     wsS.Columns("A:L").AutoFit
     If Not gSuppressPositionMsg Then
+        CloseProgressForm
         MsgBox "Daily snapshot saved for " & Format$(snapDt, "yyyy-mm-dd"), vbInformation
     End If
 
 Clean:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    ' Ensure the progress form is closed on normal completion
+    CloseProgressForm
     Exit Sub
 
 Fail:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    CloseProgressForm
     MsgBox "Error (Take_Daily_Snapshot): " & Err.Description, vbExclamation
 End Sub
 
@@ -2647,6 +2698,7 @@ Fail:
     gSuppressPositionMsg = False
     Application.EnableEvents = True
     Application.ScreenUpdating = True
+    CloseProgressForm
     MsgBox "Error (Update_All_Snapshot): " & Err.Description, vbExclamation
 End Sub
 
