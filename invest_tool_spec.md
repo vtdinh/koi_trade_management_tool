@@ -230,36 +230,7 @@ Progress forms (modeless, auto-closed before final message)
   - Compare `CELL_NAV` (calculated) vs `CELL_NAV_REAL` (user input). If `abs(calc - real) / abs(real) >= CAPITAL_RULE_DIFF_THRESHOLD_PCT`, write a warning message to `CELL_NAV_ACTION`.
 
 ## Version History
-- v2.7.1:
-  - Progress UI consistency on Position sheet: modeless progress forms displayed during long operations and always closed before any final MsgBox.
-    - Update_Capital_and_Position: "Updating Capital and Position..."
-    - Take_Daily_Snapshot: "Updating snapshot..."
-    - 3M backfill helper: "Updating missing snapshots..."
-- v2.7.0:
-  - Pricing priority: Binance first (D1 close/realtime), then Exchange-specific pricing (OKX/Bybit) using daily close for past cutoffs and realtime for today. If both fail the macro stops with the fetch error.
-  - Position charts: added three daily pies showing per-coin breakdowns within Alt groups. ChartObject names are now short: `Alt.TOP`, `Alt.MID`, `Alt.LOW` (legacy names `Portfolio_Alt.*_Daily` are auto-renamed in code).
-  - Removed per-coin pie `Portfolio_Coin` from Position.
-  - Avg. cost and avg sell price now rounded using `ROUND_PRICE_DECIMALS` instead of 0 decimals.
-  - Added `NAV 3M` chart (line) with date axis; legend hidden; auto-scaled Y axis with 10% margin around 3M min/max, rounded to thousands.
-  - Added NAV metrics cells: NAV ATH/ATL/Drawdown (3M window) and allocation metrics (%Coin, %BTC, %Alt.*, counts).
-  - Added `%NAV` column calculation for open rows (Available Balance / total NAV).
-- v2.6.2:
-  - Position: renamed charts — `Portfolio1` ? `Portfolio_Category_Daily`; `Portfolio2` ? `Portfolio_Coin`.
-  - Position: quantity display format for “Buy Qty”, “Sell Qty”, and “Available Qty” now syncs with the `Order_History!Qty` column format.
-- v2.6.1:
-  - Default Category sheet renamed to "Catagory" (intentional spelling); code accepts both "Catagory" and "Category".
-  - Dashboard: added charts Cash vs NAV and Portfolio_Category (replaces legacy Portfolio_Group).
-  - Portfolio_Category prefers computing from Holdings + Catagory mapping; falls back to snapshot columns.
-  - Alt.* charts: tolerant group name comparison; avoid a lone "Other" by keeping all coins when all slices are tiny.
-  - GetOrCreateChart finds and renames legacy/typo chart names to the canonical ones.
-  - Kept drawdown annotation only on NAV; PnL drawdown removed.
-- v2.6.0:
-  - New Update_Dashboard with three charts: NAV (with drawdown annotation), PnL, and combined Deposit & Withdraw.
-  - Current drawdown = 0 when latest NAV equals all-time high (tolerant by EPS_CLOSE).
-  - PnL X axis always at bottom.
-  - Added SHEET_DASHBOARD and NAV_MDD_* config; default SHEET_CATEGORY older spec used "Category".
-- v2.5.0: Added Update_All_Snapshot (bulk daily backfill), standardized Daily_Snapshot A:L layout with group totals + Holdings string, chart reset to "No holdings" when empty, single-message run mode.
-- v2.4.x: Automatic chart updates (Cash vs Coin, Portfolio1 groups, Portfolio2 per-coin), Category sheet dual-layout support.
-- v2.3.0: Deposit/Withdraw/Total P&L aggregates, expanded Daily_Snapshot, clarified pricing/timezone.
-- v2.2.x: Position builder, cutoff normalization, Binance pricing, %PnL coloring, header auto-detection, stablecoin handling.
-
+- v1.0
+  - Initial consolidated specification for the Koi+Stock Investment Workbook (Position-focused).
+  - Defines sheets, key cells, macros, chart contracts, configuration, and detailed metrics/formulas.
+  - Standardizes Category mapping behavior, pricing priority (Binance → exchange fallback), snapshot layout (A:L), and Position charting (NAV 3M, group and per‑coin pies).
