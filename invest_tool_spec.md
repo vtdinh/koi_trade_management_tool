@@ -138,7 +138,7 @@ Progress forms (modeless, auto-closed before final message)
   - Alt.TOP (ChartObject name: "Alt.TOP"): pie by coin within Alt.TOP
   - Alt.MID (ChartObject name: "Alt.MID"): pie by coin within Alt.MID
   - Alt.LOW (ChartObject name: "Alt.LOW"): pie by coin within Alt.LOW
-  - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~10% margins around 3-month min/max, rounded to thousands.
+  - NAV 3M (line): last 3 months of NAV; legend hidden. X axis is Date (BaseUnit Days) using `dd/mm/yy` per `mod_config.POS_DATE_AXIS_FMT`. XValues bind to a worksheet helper date range, and the chart has `PlotVisibleOnly=False` so hidden helper columns still plot. Y-axis is scaled each run with ~5% margins around 3-month min/max, rounded to 500s.
 - From Update_Dashboard (on Dashboard sheet):
   - NAV with drawdown annotation; PnL; Deposit & Withdraw combined.
 

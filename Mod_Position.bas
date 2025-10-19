@@ -1,5 +1,5 @@
 Option Explicit
-' Last Modified (UTC): 2025-10-19T00:00:00Z
+' Last Modified (UTC): 2025-10-19T00:15:00Z
 
 ' Batch control: suppress message boxes from Update_Capital_and_Position when running multi-day updates
 Private gSuppressPositionMsg As Boolean
@@ -1144,20 +1144,20 @@ Private Sub UpdateNav3M_MetricsAndChart(wsP As Worksheet, ByVal cutoffDate As Da
     End With
     On Error GoTo 0
 
-    ' ----- Thousand-rounded Y-axis bounds based on 3M NAV range
+    ' ----- 500-rounded Y-axis bounds based on 3M NAV range
     Dim yMin As Double, yMax As Double, unit As Double
-    unit = 1000#
+    unit = 500#
     If navATL > 0 Then
-        yMin = navATL * 0.9   ' 5% margin below
+        yMin = navATL * 0.95   ' 5% margin below
     Else
         yMin = 0#
     End If
     If navATH > 0 Then
-        yMax = navATH * 1.1   ' 5 margin above
+        yMax = navATH * 1.05   ' 5% margin above
     Else
         yMax = 1#
     End If
-    ' Round to thousand boundaries: floor for min, ceiling for max
+    ' Round to 500 boundaries: floor for min, ceiling for max
     yMin = unit * Int(yMin / unit)
     yMax = unit * Int((yMax + unit - 1#) / unit)
     If yMax <= yMin Then yMax = yMin + unit
